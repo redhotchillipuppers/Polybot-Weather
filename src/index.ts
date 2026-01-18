@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
+import { getLondonWeatherForecast } from './weather.js';
 
 // Load environment variables
 dotenv.config();
@@ -34,7 +35,15 @@ async function main() {
 
   console.log('Bot initialized successfully!');
 
-  // TODO: Fetch weather forecast
+  // Fetch weather forecast
+  console.log('\nFetching London weather forecast...');
+  try {
+    const forecast = await getLondonWeatherForecast(OPENWEATHER_API_KEY);
+    console.log(`Day after tomorrow (${forecast.date}): Predicted max temp ${forecast.maxTemperature}°C`);
+  } catch (error) {
+    console.error('Failed to fetch weather forecast:', error);
+  }
+
   // TODO: Query Polymarket markets
   // TODO: Calculate edge
   // TODO: Place trade if profitable
