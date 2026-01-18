@@ -26,6 +26,7 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
     markets.forEach((m: any, i: number) => {
       console.log(`${i + 1}. [${m.category || 'NO CATEGORY'}] ${m.question}`);
       console.log(`   Outcomes type: ${typeof m.outcomes}, value: ${JSON.stringify(m.outcomes)}`);
+      console.log(`   Prices type: ${typeof m.outcomePrices}, value: ${JSON.stringify(m.outcomePrices)}`);
     });
 
     // For now, just return all markets to see what we get
@@ -33,24 +34,37 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
     // Map to our PolymarketMarket interface
     return filteredMarkets.map((market: any) => {
-      // Parse outcomes - could be array or string
+      // Parse outcomes - could be array, JSON string, or CSV string
       let outcomes: string[];
       if (Array.isArray(market.outcomes)) {
         outcomes = market.outcomes;
       } else if (typeof market.outcomes === 'string') {
-        outcomes = market.outcomes.split(',');
+        // Try parsing as JSON first
+        try {
+          outcomes = JSON.parse(market.outcomes);
+        } catch {
+          // If not JSON, try comma-separated
+          outcomes = market.outcomes.split(',');
+        }
       } else if (market.outcome_tokens) {
         outcomes = market.outcome_tokens.map((t: any) => t.outcome);
       } else {
         outcomes = ['Yes', 'No'];
       }
 
-      // Parse prices - could be string or array
+      // Parse prices - could be array, JSON string, or CSV string
       let prices: number[];
       if (Array.isArray(market.outcomePrices)) {
         prices = market.outcomePrices.map(Number);
       } else if (typeof market.outcomePrices === 'string') {
-        prices = market.outcomePrices.split(',').map(Number);
+        // Try parsing as JSON first
+        try {
+          const parsed = JSON.parse(market.outcomePrices);
+          prices = Array.isArray(parsed) ? parsed.map(Number) : [Number(parsed)];
+        } catch {
+          // If not JSON, try comma-separated
+          prices = market.outcomePrices.split(',').map(Number);
+        }
       } else if (Array.isArray(market.outcome_prices)) {
         prices = market.outcome_prices.map(Number);
       } else {
