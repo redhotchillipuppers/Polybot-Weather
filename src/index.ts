@@ -51,7 +51,7 @@ async function main() {
     const markets = await queryLondonTemperatureMarkets();
 
     if (markets.length === 0) {
-      console.log('No London temperature markets found closing in the next 1-3 days.');
+      console.log('No London temperature markets found closing in the next 3 days.');
     } else {
       console.log(`Found ${markets.length} market(s):\n`);
 

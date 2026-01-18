@@ -6,7 +6,13 @@ const GAMMA_API_URL = 'https://gamma-api.polymarket.com/markets';
 
 export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[]> {
   try {
-    const response = await fetch(GAMMA_API_URL);
+    // Add query parameters to search for London temperature markets and increase limit
+    const searchParams = new URLSearchParams({
+      limit: '100',
+      offset: '0',
+      closed: 'false',
+    });
+    const response = await fetch(`${GAMMA_API_URL}?${searchParams}`);
 
     if (!response.ok) {
       throw new Error(`Failed to fetch markets: ${response.statusText}`);
@@ -25,7 +31,6 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
     // Filter for London temperature markets
     const now = new Date();
-    const oneDayFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
     const filteredMarkets = markets.filter((market: any) => {
@@ -48,14 +53,14 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
       }
 
       const endDate = new Date(endDateStr);
-      const inRange = endDate >= oneDayFromNow && endDate <= threeDaysFromNow;
+      const inRange = endDate >= now && endDate <= threeDaysFromNow;
 
       console.log(`Market: "${market.question || market.title}" - Closes: ${endDate.toISOString()} - In range: ${inRange}`);
 
       return inRange;
     });
 
-    console.log(`Found ${filteredMarkets.length} London temperature markets closing in next 1-3 days`);
+    console.log(`Found ${filteredMarkets.length} London temperature markets closing in next 3 days`);
 
     // Map to our PolymarketMarket interface
     return filteredMarkets.map((market: any) => ({
