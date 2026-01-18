@@ -6,32 +6,70 @@ const GAMMA_API_URL = 'https://gamma-api.polymarket.com/markets';
 
 export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[]> {
   try {
-    // Add query parameters to search for London temperature markets and increase limit
-    const searchParams = new URLSearchParams({
-      limit: '100',
-      offset: '0',
-      closed: 'false',
-    });
-    const response = await fetch(`${GAMMA_API_URL}?${searchParams}`);
+    // Fetch more markets with potential filtering
+    const allMarkets: any[] = [];
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch markets: ${response.statusText}`);
+    // Try multiple offsets to get more markets (fetch up to 500 markets)
+    for (let offset = 0; offset < 500; offset += 100) {
+      const searchParams = new URLSearchParams({
+        limit: '100',
+        offset: offset.toString(),
+        closed: 'false',
+      });
+      const response = await fetch(`${GAMMA_API_URL}?${searchParams}`);
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch markets: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const batch = Array.isArray(data) ? data : (data.data || []);
+
+      if (batch.length === 0) {
+        break; // No more markets available
+      }
+
+      allMarkets.push(...batch);
+      console.log(`Fetched batch ${offset / 100 + 1}: ${batch.length} markets (total: ${allMarkets.length})`);
+
+      // If we got fewer than 100, we've reached the end
+      if (batch.length < 100) {
+        break;
+      }
     }
 
-    const data = await response.json();
-
-    // Handle paginated response - API might return {data: [...]} or plain array
-    const markets = Array.isArray(data) ? data : (data.data || []);
-    console.log(`Fetched ${markets.length} total markets from Polymarket`);
+    console.log(`Fetched ${allMarkets.length} total markets from Polymarket`);
 
     // Debug: show sample market structure
-    if (markets.length > 0) {
-      console.log('Sample market fields:', Object.keys(markets[0]));
+    if (allMarkets.length > 0) {
+      console.log('Sample market fields:', Object.keys(allMarkets[0]));
     }
+
+    const markets = allMarkets;
 
     // Filter for London temperature markets
     const now = new Date();
     const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+    // Debug: count how many markets match each keyword
+    const londonMarkets = markets.filter((m: any) =>
+      (m.question || m.title || '').toLowerCase().includes('london')
+    );
+    const tempMarkets = markets.filter((m: any) => {
+      const q = (m.question || m.title || '').toLowerCase();
+      return q.includes('temperature') || q.includes('temp');
+    });
+
+    console.log(`Markets with "london": ${londonMarkets.length}`);
+    console.log(`Markets with "temperature" or "temp": ${tempMarkets.length}`);
+
+    // Show first few London markets for debugging
+    if (londonMarkets.length > 0) {
+      console.log('\nSample London markets:');
+      londonMarkets.slice(0, 3).forEach((m: any) => {
+        console.log(`  - ${m.question}`);
+      });
+    }
 
     const filteredMarkets = markets.filter((market: any) => {
       // Try different field names for the question text
