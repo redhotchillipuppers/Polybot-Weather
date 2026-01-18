@@ -1,9 +1,6 @@
 import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
-import { fetchLondonWeatherForecast } from './weather.js';
-import { findLondonTemperatureMarkets } from './polymarket.js';
-import { calculateEdge, generateTradeOrder } from './strategy.js';
 
 // Load environment variables
 dotenv.config();
@@ -37,45 +34,10 @@ async function main() {
 
   console.log('Bot initialized successfully!');
 
-  // Main trading loop
-  while (true) {
-    try {
-      console.log('\n--- Starting new trading cycle ---');
-
-      // Step 4: Fetch weather forecast
-      console.log('Fetching London weather forecast...');
-      const forecast = await fetchLondonWeatherForecast(OPENWEATHER_API_KEY);
-      console.log(`Forecast: ${forecast.maxTemp}°C max temp on ${forecast.date}`);
-
-      // Step 5: Query Polymarket markets
-      console.log('Searching for London temperature markets...');
-      const markets = await findLondonTemperatureMarkets(client);
-      console.log(`Found ${markets.length} relevant markets`);
-
-      // Step 6: Calculate edge for each market
-      for (const market of markets) {
-        console.log(`\nAnalyzing market: ${market.question}`);
-        const edge = calculateEdge(forecast, market);
-        console.log(`Edge: ${(edge.expectedValue * 100).toFixed(2)}%, Recommendation: ${edge.recommendation}`);
-
-        // Step 7: Place trade if profitable
-        const tradeOrder = generateTradeOrder(edge);
-        if (tradeOrder) {
-          console.log(`Placing ${tradeOrder.side} order: ${tradeOrder.size} @ ${tradeOrder.price}`);
-          // TODO: Execute trade via client.postOrder()
-        }
-      }
-
-      // Wait before next cycle (e.g., 1 hour)
-      console.log('\n--- Cycle complete. Waiting for next run ---');
-      await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
-
-    } catch (error) {
-      console.error('Error in trading cycle:', error);
-      // Wait 5 minutes before retrying on error
-      await new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000));
-    }
-  }
+  // TODO: Fetch weather forecast
+  // TODO: Query Polymarket markets
+  // TODO: Calculate edge
+  // TODO: Place trade if profitable
 }
 
 main().catch(console.error);
