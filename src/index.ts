@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast } from './weather.js';
+import { queryLondonTemperatureMarkets } from './polymarket.js';
 
 // Load environment variables
 dotenv.config();
@@ -44,7 +45,33 @@ async function main() {
     console.error('Failed to fetch weather forecast:', error);
   }
 
-  // TODO: Query Polymarket markets
+  // Query Polymarket markets
+  console.log('\nQuerying Polymarket for London temperature markets...');
+  try {
+    const markets = await queryLondonTemperatureMarkets();
+
+    if (markets.length === 0) {
+      console.log('No London temperature markets found closing in the next 1-3 days.');
+    } else {
+      console.log(`Found ${markets.length} market(s):\n`);
+
+      markets.forEach((market, index) => {
+        console.log(`${index + 1}. ${market.question}`);
+        console.log(`   Market ID: ${market.id}`);
+        console.log(`   Closes: ${new Date(market.endDate).toLocaleString()}`);
+        console.log(`   Current odds:`);
+        market.outcomes.forEach((outcome, i) => {
+          const price = market.prices[i];
+          const percentage = (price * 100).toFixed(1);
+          console.log(`     ${outcome}: ${percentage}% (${price.toFixed(3)})`);
+        });
+        console.log('');
+      });
+    }
+  } catch (error) {
+    console.error('Failed to query Polymarket markets:', error);
+  }
+
   // TODO: Calculate edge
   // TODO: Place trade if profitable
 }
