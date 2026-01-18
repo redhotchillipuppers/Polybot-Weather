@@ -6,3 +6,11 @@ export interface WeatherForecast {
   minTemperature: number;
   description: string;
 }
+
+export interface PolymarketMarket {
+  id: string;
+  question: string;
+  outcomes: string[];
+  prices: number[];
+  endDate: string;
+}
