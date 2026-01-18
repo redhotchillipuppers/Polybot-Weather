@@ -6,34 +6,63 @@ const GAMMA_API_URL = 'https://gamma-api.polymarket.com/markets';
 
 export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[]> {
   try {
-    // Fetch more markets to find London temperature ones
-    const searchParams = new URLSearchParams({
-      limit: '100',
-      closed: 'false',
-    });
-    const response = await fetch(`${GAMMA_API_URL}?${searchParams}`);
+    // Try searching for London temperature markets
+    // The API might support text search via query parameters
+    const allMarkets: any[] = [];
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch markets: ${response.statusText}`);
+    // Try different approaches to find the markets
+    // Approach 1: Search with keywords
+    const searchQueries = [
+      'london temperature',
+      'london',
+      'weather london'
+    ];
+
+    for (const query of searchQueries) {
+      console.log(`Trying search query: "${query}"`);
+      const searchParams = new URLSearchParams({
+        limit: '100',
+        closed: 'false',
+      });
+
+      // Try adding search parameter (API might support it)
+      if (query) {
+        searchParams.set('search', query);
+      }
+
+      const response = await fetch(`${GAMMA_API_URL}?${searchParams}`);
+
+      if (!response.ok) {
+        console.log(`  Search failed: ${response.statusText}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const markets = Array.isArray(data) ? data : (data.data || []);
+
+      console.log(`  Fetched ${markets.length} markets`);
+
+      // Check if we found London temperature markets
+      const londonTempMarkets = markets.filter((m: any) => {
+        const question = (m.question || '').toLowerCase();
+        return question.includes('london') && (question.includes('temperature') || question.includes('temp'));
+      });
+
+      console.log(`  Found ${londonTempMarkets.length} London temperature markets`);
+
+      if (londonTempMarkets.length > 0) {
+        // Found some! Use these markets
+        allMarkets.push(...londonTempMarkets);
+        break; // Stop searching
+      }
     }
 
-    const data = await response.json();
-    const markets = Array.isArray(data) ? data : (data.data || []);
-
-    console.log(`Fetched ${markets.length} total markets from Polymarket`);
-
-    // Filter for London temperature markets
-    const londonTempMarkets = markets.filter((m: any) => {
-      const question = (m.question || '').toLowerCase();
-      return question.includes('london') && (question.includes('temperature') || question.includes('temp'));
-    });
-
-    console.log(`Found ${londonTempMarkets.length} markets matching "London" + "temperature"`);
+    console.log(`\nTotal London temperature markets found: ${allMarkets.length}`);
 
     // Show the London temperature markets we found
-    if (londonTempMarkets.length > 0) {
-      console.log('\nLondon temperature markets found:');
-      londonTempMarkets.forEach((m: any, i: number) => {
+    if (allMarkets.length > 0) {
+      console.log('\nLondon temperature markets:');
+      allMarkets.forEach((m: any, i: number) => {
         console.log(`  ${i + 1}. ${m.question}`);
         console.log(`     Closes: ${m.endDateIso || m.end_date_iso}`);
       });
@@ -43,7 +72,7 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
     const now = new Date();
     const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
-    const filteredMarkets = londonTempMarkets.filter((market: any) => {
+    const filteredMarkets = allMarkets.filter((market: any) => {
       const endDateStr = market.endDateIso || market.end_date_iso || market.endDate;
       if (!endDateStr) return false;
 
