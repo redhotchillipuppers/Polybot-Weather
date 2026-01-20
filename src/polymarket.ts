@@ -10,13 +10,20 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
     // First, try to find events with London temperature
     console.log('Searching for London temperature events...');
-    const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=100&closed=false`);
+    // Try without closed filter to see if that's the issue
+    const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=200`);
 
     if (eventsResponse.ok) {
       const eventsData = await eventsResponse.json();
       const events = Array.isArray(eventsData) ? eventsData : (eventsData.data || []);
 
       console.log(`Fetched ${events.length} events`);
+
+      // Debug: show first few event titles to see what we're getting
+      console.log('\nSample event titles:');
+      events.slice(0, 5).forEach((e: any, i: number) => {
+        console.log(`  ${i + 1}. "${e.title}" (closed: ${e.closed})`);
+      });
 
       // Filter for London temperature events
       const londonEvents = events.filter((e: any) => {
