@@ -8,26 +8,47 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
   try {
     let allMarkets: any[] = [];
 
-    // Try fetching by event slug (from the URL we found)
-    const eventSlug = 'highest-temperature-in-london-on-january-21';
-    console.log(`Trying to fetch event: ${eventSlug}`);
+    // First, try to find events with London temperature
+    console.log('Searching for London temperature events...');
+    const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=100&closed=false`);
 
-    const eventResponse = await fetch(`${GAMMA_API_URL}/events/${eventSlug}`);
+    if (eventsResponse.ok) {
+      const eventsData = await eventsResponse.json();
+      const events = Array.isArray(eventsData) ? eventsData : (eventsData.data || []);
 
-    if (eventResponse.ok) {
-      const eventData = await eventResponse.json();
-      console.log('Event data received:', JSON.stringify(eventData, null, 2));
+      console.log(`Fetched ${events.length} events`);
 
-      // Extract markets from the event
-      const markets = eventData.markets || [];
-      console.log(`Found ${markets.length} markets in this event`);
+      // Filter for London temperature events
+      const londonEvents = events.filter((e: any) => {
+        const title = (e.title || '').toLowerCase();
+        return title.includes('london') && (title.includes('temperature') || title.includes('temp'));
+      });
 
-      allMarkets = markets;
+      console.log(`Found ${londonEvents.length} London temperature events`);
+
+      if (londonEvents.length > 0) {
+        console.log('\nLondon temperature events:');
+        londonEvents.forEach((e: any, i: number) => {
+          console.log(`  ${i + 1}. ${e.title} (slug: ${e.slug})`);
+          console.log(`     Markets in event: ${e.markets?.length || 0}`);
+        });
+
+        // Extract all markets from these events
+        londonEvents.forEach((event: any) => {
+          if (event.markets && Array.isArray(event.markets)) {
+            allMarkets.push(...event.markets);
+          }
+        });
+
+        console.log(`\nTotal markets extracted from events: ${allMarkets.length}`);
+      }
     } else {
-      console.log(`Event fetch failed: ${eventResponse.status} ${eventResponse.statusText}`);
-      console.log('Falling back to market search...');
+      console.log(`Events fetch failed: ${eventsResponse.status} ${eventsResponse.statusText}`);
+    }
 
-      // Fallback: try markets endpoint
+    // If we didn't find any markets through events, fall back to direct market search
+    if (allMarkets.length === 0) {
+      console.log('\nNo markets found in events, trying direct market search...');
       const response = await fetch(`${GAMMA_API_URL}/markets?limit=100&closed=false`);
 
       if (!response.ok) {
@@ -48,14 +69,12 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
       console.log(`Found ${allMarkets.length} London temperature markets`);
     }
 
-    console.log(`\nTotal London temperature markets found: ${allMarkets.length}`);
-
     // Show the London temperature markets we found
     if (allMarkets.length > 0) {
-      console.log('\nLondon temperature markets:');
+      console.log('\nMarkets found:');
       allMarkets.forEach((m: any, i: number) => {
         console.log(`  ${i + 1}. ${m.question}`);
-        console.log(`     Closes: ${m.endDateIso || m.end_date_iso}`);
+        console.log(`     Closes: ${m.endDateIso || m.end_date_iso || m.endDate}`);
       });
     }
 
