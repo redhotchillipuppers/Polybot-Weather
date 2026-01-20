@@ -8,15 +8,50 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
   try {
     let allMarkets: any[] = [];
 
-    // First, try to find events with London temperature
-    console.log('Searching for London temperature events...');
-    const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=100&closed=false`);
+    // Try fetching specific event by slug (correct path from docs: /events/slug/{slug})
+    const eventSlugs = [
+      'highest-temperature-in-london-on-january-22',
+      'highest-temperature-in-london-on-january-21',
+      'highest-temperature-in-london-on-january-20',
+    ];
 
-    if (eventsResponse.ok) {
+    console.log('Trying to fetch London temperature events by slug...');
+
+    for (const slug of eventSlugs) {
+      console.log(`  Trying slug: ${slug}`);
+      const eventResponse = await fetch(`${GAMMA_API_URL}/events/slug/${slug}`);
+
+      if (eventResponse.ok) {
+        const eventData = await eventResponse.json();
+        console.log(`  ✓ Found event: "${eventData.title}"`);
+
+        if (eventData.markets && Array.isArray(eventData.markets)) {
+          console.log(`    Markets in event: ${eventData.markets.length}`);
+          allMarkets.push(...eventData.markets);
+        }
+      } else {
+        console.log(`  ✗ Event not found (${eventResponse.status})`);
+      }
+    }
+
+    console.log(`\nTotal markets found via slugs: ${allMarkets.length}`);
+
+    // If no luck with slugs, fall back to searching events
+    if (allMarkets.length === 0) {
+      console.log('\nFalling back to event search...');
+      const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=200`);
+
+      if (eventsResponse.ok) {
       const eventsData = await eventsResponse.json();
       const events = Array.isArray(eventsData) ? eventsData : (eventsData.data || []);
 
       console.log(`Fetched ${events.length} events`);
+
+      // Debug: show first few event titles to see what we're getting
+      console.log('\nSample event titles:');
+      events.slice(0, 5).forEach((e: any, i: number) => {
+        console.log(`  ${i + 1}. "${e.title}" (closed: ${e.closed})`);
+      });
 
       // Filter for London temperature events
       const londonEvents = events.filter((e: any) => {
@@ -41,9 +76,10 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         });
 
         console.log(`\nTotal markets extracted from events: ${allMarkets.length}`);
+        }
+      } else {
+        console.log(`Events fetch failed: ${eventsResponse.status} ${eventsResponse.statusText}`);
       }
-    } else {
-      console.log(`Events fetch failed: ${eventsResponse.status} ${eventsResponse.statusText}`);
     }
 
     // If we didn't find any markets through events, fall back to direct market search
