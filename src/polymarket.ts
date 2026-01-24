@@ -4,16 +4,30 @@ import type { PolymarketMarket } from './types.js';
 
 const GAMMA_API_URL = 'https://gamma-api.polymarket.com';
 
+// Generate event slugs for upcoming days
+function generateUpcomingEventSlugs(daysAhead: number = 3): string[] {
+  const slugs: string[] = [];
+  const months = ['january', 'february', 'march', 'april', 'may', 'june',
+                  'july', 'august', 'september', 'october', 'november', 'december'];
+
+  for (let i = 0; i <= daysAhead; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() + i);
+    const month = months[date.getMonth()];
+    const day = date.getDate();
+    slugs.push(`highest-temperature-in-london-on-${month}-${day}`);
+  }
+
+  return slugs;
+}
+
 export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[]> {
   try {
     let allMarkets: any[] = [];
 
     // Try fetching specific event by slug (correct path from docs: /events/slug/{slug})
-    const eventSlugs = [
-      'highest-temperature-in-london-on-january-22',
-      'highest-temperature-in-london-on-january-21',
-      'highest-temperature-in-london-on-january-20',
-    ];
+    // Generate slugs dynamically for today and next few days
+    const eventSlugs = generateUpcomingEventSlugs(3);
 
     console.log('Trying to fetch London temperature events by slug...');
 

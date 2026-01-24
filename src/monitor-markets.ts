@@ -230,6 +230,9 @@ async function startMonitoring(): Promise<void> {
   console.log('\nPerforming initial data collection...');
   await checkWeatherForecast();
 
+  // Also do an explicit odds check on startup
+  await checkMarketOdds();
+
   // Set up intervals
   const marketInterval = setInterval(async () => {
     await checkMarketOdds();
