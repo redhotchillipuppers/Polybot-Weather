@@ -2,7 +2,7 @@
 import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
-import { getLondonWeatherForecast } from './weather.js';
+import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
 import type { WeatherForecast, PolymarketMarket } from './types.js';
 import * as fs from 'fs';
@@ -34,12 +34,13 @@ interface MarketSnapshot {
 interface MonitoringEntry {
   timestamp: string;
   entryType: 'market_check' | 'weather_check' | 'combined';
-  weatherForecast: WeatherForecast | null;
+  weatherForecast: WeatherForecast | null;  // Deprecated: kept for backwards compatibility
+  weatherForecasts: WeatherForecast[];       // Weather forecasts matching market dates
   markets: MarketSnapshot[];
 }
 
-// State to track latest weather forecast (only updates hourly)
-let latestWeatherForecast: WeatherForecast | null = null;
+// State to track latest weather forecasts (only updates hourly)
+let latestWeatherForecasts: WeatherForecast[] = [];
 
 // Get log file path for today
 function getLogFilePath(): string {
@@ -76,6 +77,23 @@ function marketToSnapshot(market: PolymarketMarket): MarketSnapshot {
     yesPrice,
     endDate: market.endDate,
   };
+}
+
+// Extract unique dates from markets (based on endDate)
+function extractUniqueDatesFromMarkets(markets: PolymarketMarket[]): Date[] {
+  const dateStrings = new Set<string>();
+
+  for (const market of markets) {
+    if (market.endDate) {
+      // Parse the end date and normalize to just the date portion
+      const endDate = new Date(market.endDate);
+      const dateStr = endDate.toISOString().split('T')[0];
+      dateStrings.add(dateStr);
+    }
+  }
+
+  // Convert back to Date objects
+  return Array.from(dateStrings).map(dateStr => new Date(dateStr));
 }
 
 // Read existing log entries from file
@@ -134,11 +152,12 @@ async function checkMarketOdds(): Promise<void> {
       });
     }
 
-    // Log entry with current weather (may be null if not yet fetched)
+    // Log entry with current weather forecasts
     const entry: MonitoringEntry = {
       timestamp: new Date().toISOString(),
       entryType: 'market_check',
-      weatherForecast: latestWeatherForecast,
+      weatherForecast: latestWeatherForecasts[0] ?? null,
+      weatherForecasts: latestWeatherForecasts,
       markets: markets.map(marketToSnapshot),
     };
 
@@ -152,24 +171,36 @@ async function checkMarketOdds(): Promise<void> {
 // Fetch weather forecast (runs every 60 minutes)
 async function checkWeatherForecast(): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[${timestamp}] Fetching weather forecast...`);
+  console.log(`\n[${timestamp}] Fetching weather forecasts...`);
 
   try {
-    const forecast = await getLondonWeatherForecast(OPENWEATHER_API_KEY);
-    latestWeatherForecast = forecast;
-
-    console.log(`  Date: ${forecast.date}`);
-    console.log(`  Predicted max temp: ${forecast.maxTemperature}°C`);
-    console.log(`  Predicted min temp: ${forecast.minTemperature}°C`);
-    console.log(`  Description: ${forecast.description}`);
-
-    // Log weather update with current market data
+    // First, fetch markets to know what dates we need weather for
     const markets = await queryLondonTemperatureMarkets();
+
+    // Extract unique dates from market end dates
+    const marketDates = extractUniqueDatesFromMarkets(markets);
+
+    if (marketDates.length === 0) {
+      console.log('  No market dates found, skipping weather fetch.');
+      return;
+    }
+
+    console.log(`  Market dates found: ${marketDates.map(d => d.toISOString().split('T')[0]).join(', ')}`);
+
+    // Fetch weather for each market date
+    const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
+    latestWeatherForecasts = forecasts;
+
+    console.log(`  Fetched weather for ${forecasts.length} date(s):`);
+    for (const forecast of forecasts) {
+      console.log(`    ${forecast.date}: max ${forecast.maxTemperature}°C, min ${forecast.minTemperature}°C (${forecast.description})`);
+    }
 
     const entry: MonitoringEntry = {
       timestamp: new Date().toISOString(),
       entryType: 'weather_check',
-      weatherForecast: forecast,
+      weatherForecast: forecasts[0] ?? null,
+      weatherForecasts: forecasts,
       markets: markets.map(marketToSnapshot),
     };
 
