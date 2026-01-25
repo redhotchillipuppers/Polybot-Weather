@@ -246,20 +246,64 @@ async function checkPolymarketOdds(): Promise<void> {
       return;
     }
 
-    console.log(`  Tracking ${trackedMarkets.size} market(s):`);
+    // Group markets by date range (event)
+    const eventGroups = new Map<string, typeof trackedMarkets extends Map<string, infer V> ? V[] : never>();
+
+    for (const [id, tracked] of trackedMarkets) {
+      const key = `${tracked.market.startDate} to ${tracked.market.endDate}`;
+      if (!eventGroups.has(key)) {
+        eventGroups.set(key, []);
+      }
+      eventGroups.get(key)!.push(tracked);
+    }
+
+    console.log(`  Tracking ${trackedMarkets.size} bracket(s) across ${eventGroups.size} event(s):`);
 
     const marketSnapshots = [];
 
-    for (const [id, tracked] of trackedMarkets) {
-      const market = tracked.market;
-      const oddsSummary = getMarketOddsSummary(market);
+    for (const [dateRange, markets] of eventGroups) {
+      // Calculate total volume for event
+      const totalVolume = markets.reduce((sum, m) => sum + m.market.volume, 0);
 
-      console.log(`\n    Market: ${market.question.substring(0, 70)}...`);
-      console.log(`      Date range: ${market.startDate} to ${market.endDate}`);
-      console.log(`      Top brackets: ${oddsSummary}`);
-      console.log(`      Volume: $${market.volume.toLocaleString()}`);
+      // Get all brackets with prices, sorted by YES price descending
+      const brackets = markets
+        .map(m => {
+          // Extract bracket range from question (e.g., "90-114" from "Will Elon Musk post 90-114 tweets...")
+          const match = m.market.question.match(/(\d+[-–]\d+|\d+\+|<\d+)/);
+          const bracketName = match ? match[1] : 'unknown';
+          // Get YES price from brackets
+          const yesBracket = m.market.brackets.find(b => b.outcome.toLowerCase() === 'yes');
+          const yesPrice = yesBracket ? yesBracket.price * 100 : 0;
+          return { name: bracketName, price: yesPrice, market: m.market };
+        })
+        .sort((a, b) => b.price - a.price);
 
-      marketSnapshots.push(marketToSnapshot(market));
+      // Display event summary
+      console.log(`\n    Event: ${dateRange}`);
+      console.log(`      Total volume: $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+      console.log(`      Brackets (${brackets.length}):`);
+
+      // Show top 5 brackets with highest odds, then summarize rest
+      const topBrackets = brackets.slice(0, 5);
+      const restBrackets = brackets.slice(5);
+
+      for (const b of topBrackets) {
+        console.log(`        ${b.name}: ${b.price.toFixed(1)}%`);
+      }
+
+      if (restBrackets.length > 0) {
+        const restWithOdds = restBrackets.filter(b => b.price >= 1);
+        if (restWithOdds.length > 0) {
+          console.log(`        ... and ${restBrackets.length} more (${restWithOdds.length} with >1% odds)`);
+        } else {
+          console.log(`        ... and ${restBrackets.length} more (all <1% odds)`);
+        }
+      }
+
+      // Add all to snapshots
+      for (const m of markets) {
+        marketSnapshots.push(marketToSnapshot(m.market));
+      }
     }
 
     // Log entry

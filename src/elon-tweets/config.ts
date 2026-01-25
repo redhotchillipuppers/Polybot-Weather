@@ -27,8 +27,8 @@ const DEFAULT_CONFIG: ElonTweetConfig = {
     'tweet count'
   ],
 
-  // Look for markets up to 10 days ahead
-  marketMaxDaysAhead: 10,
+  // Look for markets up to 4 days ahead (adjustable via ELON_MARKET_MAX_DAYS_AHEAD)
+  marketMaxDaysAhead: 4,
 
   // Data directory (relative to project root)
   dataDirectory: './elon_tweets_data'
@@ -62,6 +62,13 @@ export function loadConfig(): ElonTweetConfig {
 
   if (process.env.ELON_DATA_DIRECTORY) {
     config.dataDirectory = process.env.ELON_DATA_DIRECTORY;
+  }
+
+  if (process.env.ELON_MARKET_MAX_DAYS_AHEAD) {
+    const days = parseInt(process.env.ELON_MARKET_MAX_DAYS_AHEAD, 10);
+    if (!isNaN(days) && days > 0) {
+      config.marketMaxDaysAhead = days;
+    }
   }
 
   // Load persisted config (cached user ID, etc.)

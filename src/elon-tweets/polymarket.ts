@@ -39,7 +39,12 @@ function parseBracketRange(outcome: string): { min: number | null; max: number |
     return { min: num, max: num };
   }
 
-  // Unknown format
+  // Skip Yes/No outcomes silently (they're expected for binary markets)
+  if (normalized === 'yes' || normalized === 'no') {
+    return { min: null, max: null };
+  }
+
+  // Unknown format - only warn for unexpected patterns
   console.log(`  Warning: Could not parse bracket: "${outcome}"`);
   return { min: null, max: null };
 }
