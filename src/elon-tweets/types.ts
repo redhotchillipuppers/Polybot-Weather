@@ -5,7 +5,7 @@
  */
 export interface ElonTweetConfig {
   // Polymarket settings
-  polymarketCheckIntervalMs: number;  // How often to check Polymarket (default: 10 minutes)
+  polymarketCheckMinutes: number[];   // Minutes past the hour to check Polymarket (e.g., [10, 30, 50])
 
   // X API settings
   xApiCheckTimes: string[];           // Times to check X API in HH:MM format (UTC)

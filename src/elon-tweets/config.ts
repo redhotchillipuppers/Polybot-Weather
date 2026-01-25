@@ -6,8 +6,8 @@ import * as path from 'path';
 
 // Default configuration values
 const DEFAULT_CONFIG: ElonTweetConfig = {
-  // Polymarket checks every 10 minutes
-  polymarketCheckIntervalMs: 10 * 60 * 1000,
+  // Polymarket checks at 10, 30, and 50 minutes past each hour
+  polymarketCheckMinutes: [10, 30, 50],
 
   // X API checks 3 times daily (morning, afternoon, evening UTC)
   xApiCheckTimes: ['09:00', '15:00', '21:00'],
@@ -48,10 +48,13 @@ export function loadConfig(): ElonTweetConfig {
     config.xApiBearerToken = process.env.X_API_BEARER_TOKEN;
   }
 
-  if (process.env.ELON_POLYMARKET_CHECK_INTERVAL) {
-    const interval = parseInt(process.env.ELON_POLYMARKET_CHECK_INTERVAL, 10);
-    if (!isNaN(interval) && interval > 0) {
-      config.polymarketCheckIntervalMs = interval * 60 * 1000; // Convert minutes to ms
+  if (process.env.ELON_POLYMARKET_CHECK_MINUTES) {
+    // Format: "10,30,50"
+    const minutes = process.env.ELON_POLYMARKET_CHECK_MINUTES.split(',')
+      .map(m => parseInt(m.trim(), 10))
+      .filter(m => !isNaN(m) && m >= 0 && m < 60);
+    if (minutes.length > 0) {
+      config.polymarketCheckMinutes = minutes;
     }
   }
 
@@ -162,6 +165,15 @@ export function isXApiCheckTime(config: ElonTweetConfig): boolean {
 }
 
 /**
+ * Check if current time matches any Polymarket check time
+ * Returns true if current minute matches a scheduled check minute
+ */
+export function isPolymarketCheckTime(config: ElonTweetConfig): boolean {
+  const currentMinute = new Date().getUTCMinutes();
+  return config.polymarketCheckMinutes.includes(currentMinute);
+}
+
+/**
  * Get next scheduled X API check time
  */
 export function getNextXApiCheckTime(config: ElonTweetConfig): Date {
@@ -204,8 +216,15 @@ export function validateConfig(config: ElonTweetConfig): { valid: boolean; error
     errors.push('X_API_BEARER_TOKEN environment variable is required');
   }
 
-  if (config.polymarketCheckIntervalMs < 60000) {
-    errors.push('Polymarket check interval must be at least 1 minute');
+  if (config.polymarketCheckMinutes.length === 0) {
+    errors.push('At least one Polymarket check minute must be configured');
+  }
+
+  // Validate minute values
+  for (const minute of config.polymarketCheckMinutes) {
+    if (minute < 0 || minute >= 60) {
+      errors.push(`Invalid Polymarket check minute: ${minute} (must be 0-59)`);
+    }
   }
 
   if (config.xApiCheckTimes.length === 0) {
@@ -230,7 +249,7 @@ export function validateConfig(config: ElonTweetConfig): { valid: boolean; error
  */
 export function printConfig(config: ElonTweetConfig): void {
   console.log('\nConfiguration:');
-  console.log(`  Polymarket check interval: ${config.polymarketCheckIntervalMs / 60000} minutes`);
+  console.log(`  Polymarket check minutes: :${config.polymarketCheckMinutes.join(', :')} (every hour)`);
   console.log(`  X API check times (UTC): ${config.xApiCheckTimes.join(', ')}`);
   console.log(`  X API Bearer Token: ${config.xApiBearerToken ? '***configured***' : 'NOT SET'}`);
   console.log(`  Elon User ID: ${config.elonUserId || 'Will be fetched on first run'}`);

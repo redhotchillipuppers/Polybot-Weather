@@ -10,6 +10,7 @@ import {
   ensureDataDirectory,
   getLogFilePath,
   isXApiCheckTime,
+  isPolymarketCheckTime,
   getNextXApiCheckTime,
   validateConfig,
   printConfig
@@ -44,6 +45,7 @@ let config: ElonTweetConfig;
 let trackedMarkets: Map<string, TrackedMarket> = new Map();
 let latestTweetCounts: Map<string, TweetCountData> = new Map(); // keyed by "startDate-endDate"
 let lastXApiCheck: Date | null = null;
+let lastPolymarketCheck: Date | null = null;
 
 // ============================================================================
 // Logging Functions
@@ -490,10 +492,21 @@ async function startMonitoring(): Promise<void> {
     await checkXApiTweetCounts();
   }
 
-  // Set up Polymarket check interval
-  const polymarketInterval = setInterval(async () => {
-    await checkPolymarketOdds();
-  }, config.polymarketCheckIntervalMs);
+  // Set up Polymarket check (checks every minute if it's time)
+  const polymarketCheckInterval = setInterval(async () => {
+    if (isPolymarketCheckTime(config)) {
+      // Avoid checking twice in the same minute
+      if (lastPolymarketCheck) {
+        const timeSinceLastCheck = Date.now() - lastPolymarketCheck.getTime();
+        if (timeSinceLastCheck < 60 * 1000) {
+          return; // Skip if checked within last minute
+        }
+      }
+
+      lastPolymarketCheck = new Date();
+      await checkPolymarketOdds();
+    }
+  }, 60 * 1000); // Check every minute if it's time
 
   // Set up X API check interval (checks every minute if it's time)
   const xApiCheckInterval = setInterval(async () => {
@@ -515,14 +528,14 @@ async function startMonitoring(): Promise<void> {
   // Print schedule info
   const nextXApiCheck = getNextXApiCheckTime(config);
   console.log('\nMonitoring started. Press Ctrl+C to stop.');
-  console.log(`Next Polymarket check in ${config.polymarketCheckIntervalMs / 60000} minutes`);
+  console.log(`Polymarket checks at :${config.polymarketCheckMinutes.join(', :')} past each hour (UTC)`);
   console.log(`Next X API check at: ${nextXApiCheck.toISOString()}`);
   console.log(`X API check times (UTC): ${config.xApiCheckTimes.join(', ')}`);
 
   // Handle graceful shutdown
   const shutdown = () => {
     console.log('\n\nShutting down monitoring...');
-    clearInterval(polymarketInterval);
+    clearInterval(polymarketCheckInterval);
     clearInterval(xApiCheckInterval);
     console.log(`Final log file: ${getLogFilePath(config)}`);
     console.log('Goodbye!');
