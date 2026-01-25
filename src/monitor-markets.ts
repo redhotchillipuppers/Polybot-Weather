@@ -16,9 +16,9 @@ const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY!;
 const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
-// Intervals in milliseconds
-const MARKET_CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
-const WEATHER_CHECK_INTERVAL = 60 * 60 * 1000; // 60 minutes
+// Scheduling configuration
+const MARKET_CHECK_MINUTES = [0, 20, 40]; // Run at :00, :20, :40
+const WEATHER_CHECK_MINUTES = [0]; // Run on the hour only
 
 // Data structure for logging
 interface MarketSnapshot {
@@ -127,6 +127,70 @@ function appendToLog(entry: MonitoringEntry): void {
 // Format timestamp for console output
 function formatTimestamp(): string {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
+}
+
+// Calculate milliseconds until the next scheduled minute
+function getDelayUntilNextMinute(scheduledMinutes: number[]): number {
+  if (scheduledMinutes.length === 0) {
+    throw new Error('scheduledMinutes must not be empty');
+  }
+
+  const now = new Date();
+  const currentMinute = now.getMinutes();
+  const currentSeconds = now.getSeconds();
+  const currentMs = now.getMilliseconds();
+
+  // Find the next scheduled minute
+  const nextMinute = scheduledMinutes.find(m => m > currentMinute);
+
+  if (nextMinute === undefined) {
+    // Next scheduled time is in the next hour
+    const firstMinute = scheduledMinutes[0]!;
+    const minutesUntil = 60 - currentMinute + firstMinute;
+    return (minutesUntil * 60 - currentSeconds) * 1000 - currentMs;
+  }
+
+  const minutesUntil = nextMinute - currentMinute;
+  return (minutesUntil * 60 - currentSeconds) * 1000 - currentMs;
+}
+
+// Scheduler class to manage clock-aligned scheduling with graceful shutdown
+class ClockAlignedScheduler {
+  private timeout: NodeJS.Timeout | null = null;
+  private cancelled = false;
+
+  constructor(
+    private scheduledMinutes: number[],
+    private callback: () => Promise<void>,
+    private name: string
+  ) {}
+
+  start(): void {
+    this.cancelled = false;
+    this.scheduleNext();
+  }
+
+  stop(): void {
+    this.cancelled = true;
+    if (this.timeout) {
+      clearTimeout(this.timeout);
+      this.timeout = null;
+    }
+  }
+
+  private scheduleNext(): void {
+    if (this.cancelled) return;
+
+    const delay = getDelayUntilNextMinute(this.scheduledMinutes);
+    const nextTime = new Date(Date.now() + delay);
+    console.log(`  Next ${this.name} scheduled for ${nextTime.toISOString().replace('T', ' ').substring(0, 19)}`);
+
+    this.timeout = setTimeout(async () => {
+      if (this.cancelled) return;
+      await this.callback();
+      this.scheduleNext();
+    }, delay);
+  }
 }
 
 // Check market odds (runs every 15 minutes)
@@ -243,8 +307,8 @@ async function startMonitoring(): Promise<void> {
   console.log('POLYMARKET WEATHER MONITORING');
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
-  console.log(`Market check interval: ${MARKET_CHECK_INTERVAL / 60000} minutes`);
-  console.log(`Weather check interval: ${WEATHER_CHECK_INTERVAL / 60000} minutes`);
+  console.log(`Market checks at: :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
+  console.log(`Weather checks at: :${WEATHER_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
   console.log('='.repeat(60));
 
@@ -264,24 +328,21 @@ async function startMonitoring(): Promise<void> {
   // Also do an explicit odds check on startup
   await checkMarketOdds();
 
-  // Set up intervals
-  const marketInterval = setInterval(async () => {
-    await checkMarketOdds();
-  }, MARKET_CHECK_INTERVAL);
+  // Set up clock-aligned scheduling
+  console.log('\nScheduling recurring checks...');
+  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, checkMarketOdds, 'market check');
+  const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, checkWeatherForecast, 'weather check');
 
-  const weatherInterval = setInterval(async () => {
-    await checkWeatherForecast();
-  }, WEATHER_CHECK_INTERVAL);
+  marketScheduler.start();
+  weatherScheduler.start();
 
   console.log('\nMonitoring started. Press Ctrl+C to stop.');
-  console.log(`Next market check in ${MARKET_CHECK_INTERVAL / 60000} minutes`);
-  console.log(`Next weather check in ${WEATHER_CHECK_INTERVAL / 60000} minutes`);
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
     console.log('\n\nShutting down monitoring...');
-    clearInterval(marketInterval);
-    clearInterval(weatherInterval);
+    marketScheduler.stop();
+    weatherScheduler.stop();
     console.log(`Final log file: ${getLogFilePath()}`);
     console.log('Goodbye!');
     process.exit(0);
@@ -289,8 +350,8 @@ async function startMonitoring(): Promise<void> {
 
   process.on('SIGTERM', () => {
     console.log('\n\nReceived SIGTERM, shutting down...');
-    clearInterval(marketInterval);
-    clearInterval(weatherInterval);
+    marketScheduler.stop();
+    weatherScheduler.stop();
     process.exit(0);
   });
 }
