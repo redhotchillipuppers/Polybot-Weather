@@ -20,7 +20,7 @@ interface OpenWeatherResponse {
   }>;
 }
 
-export async function getLondonWeatherForecast(apiKey: string): Promise<WeatherForecast> {
+export async function getLondonWeatherForecast(apiKey: string, targetDate?: Date): Promise<WeatherForecast> {
   try {
     const url = `${FORECAST_ENDPOINT}?lat=${LONDON_LAT}&lon=${LONDON_LON}&units=metric&appid=${apiKey}`;
 
@@ -31,22 +31,26 @@ export async function getLondonWeatherForecast(apiKey: string): Promise<WeatherF
 
     const data: OpenWeatherResponse = await response.json();
 
-    // Calculate the date for day after tomorrow
-    const dayAfterTomorrow = new Date();
-    dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
-    dayAfterTomorrow.setHours(0, 0, 0, 0);
+    // Use provided target date or default to day after tomorrow
+    const targetDay = targetDate ? new Date(targetDate) : new Date();
+    if (!targetDate) {
+      targetDay.setDate(targetDay.getDate() + 2);
+    }
+    targetDay.setHours(0, 0, 0, 0);
 
-    const dayAfterTomorrowEnd = new Date(dayAfterTomorrow);
-    dayAfterTomorrowEnd.setHours(23, 59, 59, 999);
+    const targetDayEnd = new Date(targetDay);
+    targetDayEnd.setHours(23, 59, 59, 999);
 
-    // Filter forecasts for day after tomorrow
+    // Filter forecasts for target day
     const targetDayForecasts = data.list.filter(item => {
       const forecastDate = new Date(item.dt * 1000);
-      return forecastDate >= dayAfterTomorrow && forecastDate <= dayAfterTomorrowEnd;
+      return forecastDate >= targetDay && forecastDate <= targetDayEnd;
     });
 
+    const dateStr = targetDay.toISOString().split('T')[0];
+
     if (targetDayForecasts.length === 0) {
-      throw new Error('No forecast data available for day after tomorrow');
+      throw new Error(`No forecast data available for ${dateStr}`);
     }
 
     // Get max and min temperatures for the day
@@ -55,7 +59,7 @@ export async function getLondonWeatherForecast(apiKey: string): Promise<WeatherF
     const description = targetDayForecasts[0].weather[0].description;
 
     return {
-      date: dayAfterTomorrow.toISOString().split('T')[0],
+      date: dateStr,
       maxTemperature: Math.round(maxTemp * 10) / 10,
       minTemperature: Math.round(minTemp * 10) / 10,
       description
@@ -64,4 +68,20 @@ export async function getLondonWeatherForecast(apiKey: string): Promise<WeatherF
     console.error('Error fetching weather forecast:', error);
     throw error;
   }
+}
+
+// Fetch weather forecasts for multiple dates
+export async function getWeatherForDates(apiKey: string, dates: Date[]): Promise<WeatherForecast[]> {
+  const forecasts: WeatherForecast[] = [];
+
+  for (const date of dates) {
+    try {
+      const forecast = await getLondonWeatherForecast(apiKey, date);
+      forecasts.push(forecast);
+    } catch (error) {
+      console.error(`Failed to fetch weather for ${date.toISOString().split('T')[0]}:`, error);
+    }
+  }
+
+  return forecasts;
 }
