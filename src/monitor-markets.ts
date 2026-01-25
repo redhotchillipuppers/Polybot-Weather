@@ -5,6 +5,7 @@ import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
 import type { WeatherForecast, PolymarketMarket } from './types.js';
+import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -50,45 +51,67 @@ function getLogFilePath(): string {
 
 // Extract temperature value from market question
 function extractTemperatureFromQuestion(question: string): string | null {
+  if (!question) return null;
   // Match patterns like "8°C or higher", "below 5°C", "7°C to 9°C"
   const tempMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C/i);
-  return tempMatch ? tempMatch[1] : null;
+  return tempMatch && tempMatch[1] ? tempMatch[1] : null;
 }
 
-// Convert market to snapshot format
-function marketToSnapshot(market: PolymarketMarket): MarketSnapshot {
-  // Find YES price (typically first outcome or explicit "Yes")
-  let yesPrice: number | null = null;
-  const yesIndex = market.outcomes.findIndex(o =>
-    o.toLowerCase() === 'yes' || o.toLowerCase().includes('yes')
-  );
-  if (yesIndex !== -1 && market.prices[yesIndex] !== undefined) {
-    yesPrice = market.prices[yesIndex];
-  } else if (market.prices.length > 0) {
-    yesPrice = market.prices[0]; // Default to first price
+// Convert market to snapshot format with null-safe handling
+function marketToSnapshot(market: PolymarketMarket | null | undefined): MarketSnapshot | null {
+  if (!market) {
+    return null;
   }
 
-  return {
-    marketId: market.id,
-    question: market.question,
-    temperatureValue: extractTemperatureFromQuestion(market.question),
-    outcomes: market.outcomes,
-    prices: market.prices,
-    yesPrice,
-    endDate: market.endDate,
-  };
+  try {
+    const outcomes = safeArray(market.outcomes);
+    const prices = safeArray(market.prices).map(p => safeNumber(p, 0));
+    const question = safeString(market.question, 'Unknown market');
+
+    // Find YES price (typically first outcome or explicit "Yes")
+    let yesPrice: number | null = null;
+    const yesIndex = outcomes.findIndex(o =>
+      typeof o === 'string' && (o.toLowerCase() === 'yes' || o.toLowerCase().includes('yes'))
+    );
+    if (yesIndex !== -1 && prices[yesIndex] !== undefined) {
+      yesPrice = prices[yesIndex] ?? null;
+    } else if (prices.length > 0) {
+      yesPrice = prices[0] ?? null; // Default to first price
+    }
+
+    return {
+      marketId: safeString(market.id, 'unknown'),
+      question,
+      temperatureValue: extractTemperatureFromQuestion(question),
+      outcomes: outcomes.map(o => safeString(o, 'Unknown')),
+      prices,
+      yesPrice,
+      endDate: safeString(market.endDate, ''),
+    };
+  } catch (error) {
+    console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);
+    return null;
+  }
 }
 
 // Extract unique dates from markets (based on endDate)
 function extractUniqueDatesFromMarkets(markets: PolymarketMarket[]): Date[] {
   const dateStrings = new Set<string>();
 
-  for (const market of markets) {
-    if (market.endDate) {
-      // Parse the end date and normalize to just the date portion
-      const endDate = new Date(market.endDate);
-      const dateStr = endDate.toISOString().split('T')[0];
-      dateStrings.add(dateStr);
+  for (const market of safeArray(markets)) {
+    if (market?.endDate) {
+      try {
+        // Parse the end date and normalize to just the date portion
+        const endDate = new Date(market.endDate);
+        if (!isNaN(endDate.getTime())) {
+          const dateStr = endDate.toISOString().split('T')[0] ?? '';
+          if (dateStr) {
+            dateStrings.add(dateStr);
+          }
+        }
+      } catch {
+        // Skip invalid dates
+      }
     }
   }
 
@@ -102,10 +125,11 @@ function readLogFile(): MonitoringEntry[] {
   try {
     if (fs.existsSync(logPath)) {
       const content = fs.readFileSync(logPath, 'utf-8');
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed) ? parsed : [];
     }
   } catch (error) {
-    console.error('Error reading log file, starting fresh:', error);
+    console.error(`Error reading log file, starting fresh: ${formatError(error)}`);
   }
   return [];
 }
@@ -113,14 +137,14 @@ function readLogFile(): MonitoringEntry[] {
 // Append entry to log file
 function appendToLog(entry: MonitoringEntry): void {
   const logPath = getLogFilePath();
-  const entries = readLogFile();
-  entries.push(entry);
 
   try {
+    const entries = readLogFile();
+    entries.push(entry);
     fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8');
     console.log(`  Logged to: ${logPath}`);
   } catch (error) {
-    console.error('Error writing to log file:', error);
+    console.error(`Error writing to log file: ${formatError(error)}`);
   }
 }
 
@@ -187,48 +211,61 @@ class ClockAlignedScheduler {
 
     this.timeout = setTimeout(async () => {
       if (this.cancelled) return;
-      await this.callback();
+      try {
+        await this.callback();
+      } catch (error) {
+        console.error(`Error in ${this.name} callback: ${formatError(error)}`);
+      }
       this.scheduleNext();
     }, delay);
   }
 }
 
-// Check market odds (runs every 15 minutes)
+// Check market odds (runs every 20 minutes)
 async function checkMarketOdds(): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[$${timestamp}] Checking market odds...`);
+  console.log(`\n[${timestamp}] Checking market odds...`);
 
   try {
     const markets = await queryLondonTemperatureMarkets();
 
-    if (markets.length === 0) {
+    if (!markets || markets.length === 0) {
       console.log('  No London temperature markets found.');
     } else {
       console.log(`  Found ${markets.length} market(s):`);
 
       markets.forEach((market, index) => {
         const snapshot = marketToSnapshot(market);
-        const yesPercentage = snapshot.yesPrice !== null
-          ? (snapshot.yesPrice * 100).toFixed(1) + '%'
-          : 'N/A';
-        console.log(`    ${index + 1}. ${market.question}`);
-        console.log(`       YES price: ${yesPercentage}`);
+        if (snapshot) {
+          const yesPercentage = snapshot.yesPrice !== null
+            ? (snapshot.yesPrice * 100).toFixed(1) + '%'
+            : 'N/A';
+          console.log(`    ${index + 1}. ${snapshot.question}`);
+          console.log(`       YES price: ${yesPercentage}`);
+        } else {
+          console.log(`    ${index + 1}. [Invalid market data]`);
+        }
       });
     }
+
+    // Convert markets to snapshots, filtering out null results
+    const marketSnapshots = safeArray(markets)
+      .map(m => marketToSnapshot(m))
+      .filter((s): s is MarketSnapshot => s !== null);
 
     // Log entry with current weather forecasts
     const entry: MonitoringEntry = {
       timestamp: new Date().toISOString(),
       entryType: 'market_check',
       weatherForecast: latestWeatherForecasts[0] ?? null,
-      weatherForecasts: latestWeatherForecasts,
-      markets: markets.map(marketToSnapshot),
+      weatherForecasts: safeArray(latestWeatherForecasts),
+      markets: marketSnapshots,
     };
 
     appendToLog(entry);
 
   } catch (error) {
-    console.error('  Error checking market odds:', error instanceof Error ? error.message : error);
+    console.error(`  Error checking market odds: ${formatError(error)}`);
   }
 }
 
@@ -253,25 +290,36 @@ async function checkWeatherForecast(): Promise<void> {
 
     // Fetch weather for each market date
     const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
-    latestWeatherForecasts = forecasts;
+    latestWeatherForecasts = safeArray(forecasts);
 
-    console.log(`  Fetched weather for ${forecasts.length} date(s):`);
-    for (const forecast of forecasts) {
-      console.log(`    ${forecast.date}: max ${forecast.maxTemperature}°C, min ${forecast.minTemperature}°C (${forecast.description})`);
+    console.log(`  Fetched weather for ${latestWeatherForecasts.length} date(s):`);
+    for (const forecast of latestWeatherForecasts) {
+      if (forecast) {
+        const date = safeString(forecast.date, 'Unknown date');
+        const maxTemp = safeNumber(forecast.maxTemperature, 0);
+        const minTemp = safeNumber(forecast.minTemperature, 0);
+        const description = safeString(forecast.description, 'No description');
+        console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C (${description})`);
+      }
     }
+
+    // Convert markets to snapshots, filtering out null results
+    const marketSnapshots = safeArray(markets)
+      .map(m => marketToSnapshot(m))
+      .filter((s): s is MarketSnapshot => s !== null);
 
     const entry: MonitoringEntry = {
       timestamp: new Date().toISOString(),
       entryType: 'weather_check',
-      weatherForecast: forecasts[0] ?? null,
-      weatherForecasts: forecasts,
-      markets: markets.map(marketToSnapshot),
+      weatherForecast: latestWeatherForecasts[0] ?? null,
+      weatherForecasts: latestWeatherForecasts,
+      markets: marketSnapshots,
     };
 
     appendToLog(entry);
 
   } catch (error) {
-    console.error('  Error fetching weather forecast:', error instanceof Error ? error.message : error);
+    console.error(`  Error fetching weather forecast: ${formatError(error)}`);
   }
 }
 
@@ -279,26 +327,31 @@ async function checkWeatherForecast(): Promise<void> {
 async function initializeClient(): Promise<ClobClient> {
   console.log('Initializing wallet and trading client...');
 
-  // Create wallet
-  const wallet = new Wallet(PRIVATE_KEY);
-  console.log('  Wallet address:', wallet.address);
+  try {
+    // Create wallet
+    const wallet = new Wallet(PRIVATE_KEY);
+    console.log('  Wallet address:', wallet.address);
 
-  // Create temp client to get API credentials
-  const tempClient = new ClobClient(HOST, CHAIN_ID, wallet);
-  const apiCreds = await tempClient.createOrDeriveApiKey();
+    // Create temp client to get API credentials
+    const tempClient = new ClobClient(HOST, CHAIN_ID, wallet);
+    const apiCreds = await tempClient.createOrDeriveApiKey();
 
-  // Create real trading client
-  const signatureType = 0;
-  const client = new ClobClient(
-    HOST,
-    CHAIN_ID,
-    wallet,
-    apiCreds,
-    signatureType
-  );
+    // Create real trading client
+    const signatureType = 0;
+    const client = new ClobClient(
+      HOST,
+      CHAIN_ID,
+      wallet,
+      apiCreds,
+      signatureType
+    );
 
-  console.log('  Trading client initialized successfully!');
-  return client;
+    console.log('  Trading client initialized successfully!');
+    return client;
+  } catch (error) {
+    console.error(`Failed to initialize trading client: ${formatError(error)}`);
+    throw error;
+  }
 }
 
 // Main monitoring function
@@ -317,16 +370,24 @@ async function startMonitoring(): Promise<void> {
   try {
     client = await initializeClient();
   } catch (error) {
-    console.error('Warning: Failed to initialize trading client:', error instanceof Error ? error.message : error);
+    console.error(`Warning: Failed to initialize trading client: ${formatError(error)}`);
     console.log('Continuing with monitoring only (no trading capabilities)...');
   }
 
   // Initial data collection - fetch both weather and markets
   console.log('\nPerforming initial data collection...');
-  await checkWeatherForecast();
+  try {
+    await checkWeatherForecast();
+  } catch (error) {
+    console.error(`Initial weather check failed: ${formatError(error)}`);
+  }
 
   // Also do an explicit odds check on startup
-  await checkMarketOdds();
+  try {
+    await checkMarketOdds();
+  } catch (error) {
+    console.error(`Initial market check failed: ${formatError(error)}`);
+  }
 
   // Set up clock-aligned scheduling
   console.log('\nScheduling recurring checks...');
@@ -358,6 +419,6 @@ async function startMonitoring(): Promise<void> {
 
 // Run the monitoring
 startMonitoring().catch((error) => {
-  console.error('Fatal error starting monitoring:', error);
+  console.error(`Fatal error starting monitoring: ${formatError(error)}`);
   process.exit(1);
 });
