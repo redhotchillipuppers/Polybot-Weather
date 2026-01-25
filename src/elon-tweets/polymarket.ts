@@ -1,6 +1,7 @@
 // Polymarket API integration for Elon Musk tweet markets
 
 import type { ElonTweetMarket, TweetBracket, ElonTweetConfig, MarketSnapshot } from './types.js';
+import { fetchWithRetry, formatForLog, getErrorMessage } from '../api-utils.js';
 
 const GAMMA_API_URL = 'https://gamma-api.polymarket.com';
 
@@ -172,66 +173,92 @@ function isElonTweetMarket(market: any): boolean {
  */
 function parseMarketData(market: any, eventData?: any): ElonTweetMarket | null {
   try {
-    const question = market.question || market.title || '';
+    if (!market) {
+      return null;
+    }
+
+    const question = String(market.question || market.title || '');
     const endDateStr = market.endDateIso || market.end_date_iso || market.endDate || market.close_time;
 
     if (!endDateStr) {
-      console.log(`  Skipping market without end date: ${question.substring(0, 50)}...`);
+      const questionPreview = question.substring(0, 50) || 'Unknown';
+      console.log(`  Skipping market without end date: ${questionPreview}...`);
       return null;
     }
 
     // Extract date range from question
     const { startDate, endDate } = extractDateRangeFromQuestion(question, endDateStr);
 
-    // Parse outcomes into brackets
+    // Parse outcomes into brackets with null safety
     let outcomes: string[] = [];
     if (Array.isArray(market.outcomes)) {
-      outcomes = market.outcomes;
+      outcomes = market.outcomes.map((o: any) => String(o ?? 'Unknown'));
     } else if (typeof market.outcomes === 'string') {
       try {
-        outcomes = JSON.parse(market.outcomes);
+        const parsed = JSON.parse(market.outcomes);
+        outcomes = Array.isArray(parsed) ? parsed.map((o: any) => String(o ?? 'Unknown')) : [market.outcomes];
       } catch {
-        outcomes = market.outcomes.split(',').map((s: string) => s.trim());
+        outcomes = market.outcomes.split(',').map((s: string) => (s?.trim() || 'Unknown'));
       }
     } else if (market.tokens && Array.isArray(market.tokens)) {
-      outcomes = market.tokens.map((t: any) => t.outcome);
+      outcomes = market.tokens.map((t: any) => String(t?.outcome ?? 'Unknown'));
     }
 
-    // Parse prices
+    // Parse prices with null safety
     let prices: number[] = [];
     if (Array.isArray(market.outcomePrices)) {
-      prices = market.outcomePrices.map(Number);
+      prices = market.outcomePrices.map((p: any) => {
+        const num = Number(p);
+        return isNaN(num) ? 0 : num;
+      });
     } else if (typeof market.outcomePrices === 'string') {
       try {
         const parsed = JSON.parse(market.outcomePrices);
-        prices = Array.isArray(parsed) ? parsed.map(Number) : [Number(parsed)];
+        if (Array.isArray(parsed)) {
+          prices = parsed.map((p: any) => {
+            const num = Number(p);
+            return isNaN(num) ? 0 : num;
+          });
+        } else {
+          const num = Number(parsed);
+          prices = [isNaN(num) ? 0 : num];
+        }
       } catch {
-        prices = market.outcomePrices.split(',').map(Number);
+        prices = market.outcomePrices.split(',').map((s: string) => {
+          const num = Number(s?.trim());
+          return isNaN(num) ? 0 : num;
+        });
       }
     } else if (Array.isArray(market.tokens)) {
-      prices = market.tokens.map((t: any) => Number(t.price) || 0);
+      prices = market.tokens.map((t: any) => {
+        const num = Number(t?.price);
+        return isNaN(num) ? 0 : num;
+      });
     }
 
-    // Build brackets
+    // Build brackets with null safety
     const brackets: TweetBracket[] = outcomes.map((outcome, index) => {
       const { min, max } = parseBracketRange(outcome);
-      const price = prices[index] || 0;
+      const price = prices[index] ?? 0;
+      const validPrice = isNaN(price) ? 0 : price;
 
       return {
-        tokenId: market.tokens?.[index]?.token_id || `${market.id}-${index}`,
-        outcome,
+        tokenId: String(market.tokens?.[index]?.token_id || `${market.id || 'unknown'}-${index}`),
+        outcome: String(outcome),
         minTweets: min,
         maxTweets: max,
-        price,
-        impliedProbability: price * 100
+        price: validPrice,
+        impliedProbability: validPrice * 100
       };
     });
 
+    const marketId = String(market.id || market.condition_id || market.market_id || 'unknown');
+
     return {
-      id: market.id || market.condition_id || market.market_id,
-      conditionId: market.condition_id || market.conditionId || market.id,
+      id: marketId,
+      conditionId: String(market.condition_id || market.conditionId || market.id || ''),
       question,
-      slug: market.slug || eventData?.slug || '',
+      slug: String(market.slug || eventData?.slug || ''),
       startDate,
       endDate,
       brackets,
@@ -242,7 +269,7 @@ function parseMarketData(market: any, eventData?: any): ElonTweetMarket | null {
       liquidity: Number(market.liquidity) || 0
     };
   } catch (error) {
-    console.error('  Error parsing market:', error);
+    console.error(`  Error parsing market: ${getErrorMessage(error)}`);
     return null;
   }
 }
@@ -259,36 +286,53 @@ export async function queryElonTweetMarkets(config: ElonTweetConfig): Promise<El
   try {
     // Strategy 1: Direct search with "elon musk tweets" query
     console.log('  Searching with query: "elon musk tweets"...');
-    const searchResponse = await fetch(
-      `${GAMMA_API_URL}/events?limit=100&active=true&closed=false&title_contains=elon`
-    );
+    try {
+      const searchResponse = await fetchWithRetry(
+        `${GAMMA_API_URL}/events?limit=100&active=true&closed=false&title_contains=elon`,
+        undefined,
+        { maxRetries: 3, retryOn429: true }
+      );
 
-    if (searchResponse.ok) {
-      const searchData = await searchResponse.json();
-      const events = Array.isArray(searchData) ? searchData : (searchData.data || []);
-      console.log(`  Found ${events.length} events containing "elon"`);
+      if (searchResponse && searchResponse.ok) {
+        try {
+          const searchData = await searchResponse.json();
+          const events = Array.isArray(searchData) ? searchData : (searchData?.data || []);
+          console.log(`  Found ${events.length} events containing "elon"`);
 
-      for (const event of events) {
-        const title = (event.title || '').toLowerCase();
-        // Check if it's a tweet count market
-        if (title.includes('tweet') && (title.includes('#') || title.includes('number'))) {
-          console.log(`  Found tweet market event: "${event.title}"`);
+          for (const event of events) {
+            if (!event) continue;
+            const title = (event.title || '').toLowerCase();
+            // Check if it's a tweet count market
+            if (title.includes('tweet') && (title.includes('#') || title.includes('number'))) {
+              const eventTitle = formatForLog(event.title, 'Unknown');
+              console.log(`  Found tweet market event: "${eventTitle}"`);
 
-          if (event.markets && Array.isArray(event.markets)) {
-            for (const market of event.markets) {
-              const marketId = market.id || market.condition_id;
-              if (marketId && !seenIds.has(marketId)) {
-                seenIds.add(marketId);
-                const parsed = parseMarketData(market, event);
-                if (parsed) {
-                  markets.push(parsed);
-                  console.log(`    Added bracket: ${parsed.question.substring(0, 60)}...`);
+              if (event.markets && Array.isArray(event.markets)) {
+                for (const market of event.markets) {
+                  if (!market) continue;
+                  const marketId = market.id || market.condition_id;
+                  if (marketId && !seenIds.has(marketId)) {
+                    seenIds.add(marketId);
+                    const parsed = parseMarketData(market, event);
+                    if (parsed) {
+                      markets.push(parsed);
+                      const questionPreview = parsed.question?.substring(0, 60) ?? 'No question';
+                      console.log(`    Added bracket: ${questionPreview}...`);
+                    }
+                  }
                 }
               }
             }
           }
+        } catch (parseError) {
+          console.log(`  Failed to parse search response: ${getErrorMessage(parseError)}`);
         }
+      } else {
+        const status = searchResponse?.status ?? 'no response';
+        console.log(`  Search request failed: ${status}`);
       }
+    } catch (searchError) {
+      console.log(`  Error searching events: ${getErrorMessage(searchError)}`);
     }
 
     // Strategy 2: Try fetching specific event slugs based on known patterns
@@ -297,81 +341,117 @@ export async function queryElonTweetMarkets(config: ElonTweetConfig): Promise<El
 
     for (const slug of slugPatterns) {
       try {
-        const eventResponse = await fetch(`${GAMMA_API_URL}/events/slug/${slug}`);
-        if (eventResponse.ok) {
-          const event = await eventResponse.json();
-          console.log(`  Found event via slug: "${event.title}"`);
+        const eventResponse = await fetchWithRetry(
+          `${GAMMA_API_URL}/events/slug/${slug}`,
+          undefined,
+          { maxRetries: 1, retryOn429: true }
+        );
 
-          if (event.markets && Array.isArray(event.markets)) {
-            for (const market of event.markets) {
-              const marketId = market.id || market.condition_id;
-              if (marketId && !seenIds.has(marketId)) {
-                seenIds.add(marketId);
-                const parsed = parseMarketData(market, event);
-                if (parsed) {
-                  markets.push(parsed);
-                  console.log(`    Added bracket: ${parsed.question.substring(0, 60)}...`);
+        if (eventResponse && eventResponse.ok) {
+          try {
+            const event = await eventResponse.json();
+            if (event) {
+              const eventTitle = formatForLog(event.title, 'Unknown');
+              console.log(`  Found event via slug: "${eventTitle}"`);
+
+              if (event.markets && Array.isArray(event.markets)) {
+                for (const market of event.markets) {
+                  if (!market) continue;
+                  const marketId = market.id || market.condition_id;
+                  if (marketId && !seenIds.has(marketId)) {
+                    seenIds.add(marketId);
+                    const parsed = parseMarketData(market, event);
+                    if (parsed) {
+                      markets.push(parsed);
+                      const questionPreview = parsed.question?.substring(0, 60) ?? 'No question';
+                      console.log(`    Added bracket: ${questionPreview}...`);
+                    }
+                  }
                 }
               }
             }
+          } catch (parseError) {
+            // Silent - slug response parsing failed
           }
         }
       } catch {
-        // Slug not found, continue
+        // Slug not found or error, continue
       }
     }
 
     // Strategy 3: Search markets directly
     if (markets.length === 0) {
       console.log('  Trying direct market search...');
-      const queries = ['elon tweets', 'elon musk tweets', 'musk tweets'];
 
-      for (const query of queries) {
-        const marketResponse = await fetch(
-          `${GAMMA_API_URL}/markets?limit=100&closed=false`
+      try {
+        const marketResponse = await fetchWithRetry(
+          `${GAMMA_API_URL}/markets?limit=100&closed=false`,
+          undefined,
+          { maxRetries: 3, retryOn429: true }
         );
 
-        if (marketResponse.ok) {
-          const marketData = await marketResponse.json();
-          const allMarkets = Array.isArray(marketData) ? marketData : (marketData.data || []);
+        if (marketResponse && marketResponse.ok) {
+          try {
+            const marketData = await marketResponse.json();
+            const allMarkets = Array.isArray(marketData) ? marketData : (marketData?.data || []);
 
-          for (const market of allMarkets) {
-            const question = (market.question || market.title || '').toLowerCase();
-            if (question.includes('elon') && question.includes('tweet')) {
-              const marketId = market.id || market.condition_id;
-              if (marketId && !seenIds.has(marketId)) {
-                seenIds.add(marketId);
-                const parsed = parseMarketData(market);
-                if (parsed) {
-                  markets.push(parsed);
-                  console.log(`    Added market: ${parsed.question.substring(0, 60)}...`);
+            for (const market of allMarkets) {
+              if (!market) continue;
+              const question = (market.question || market.title || '').toLowerCase();
+              if (question.includes('elon') && question.includes('tweet')) {
+                const marketId = market.id || market.condition_id;
+                if (marketId && !seenIds.has(marketId)) {
+                  seenIds.add(marketId);
+                  const parsed = parseMarketData(market);
+                  if (parsed) {
+                    markets.push(parsed);
+                    const questionPreview = parsed.question?.substring(0, 60) ?? 'No question';
+                    console.log(`    Added market: ${questionPreview}...`);
+                  }
                 }
               }
             }
+          } catch (parseError) {
+            console.log(`  Failed to parse markets response: ${getErrorMessage(parseError)}`);
           }
+        } else {
+          const status = marketResponse?.status ?? 'no response';
+          console.log(`  Markets request failed: ${status}`);
         }
+      } catch (marketError) {
+        console.log(`  Error fetching markets: ${getErrorMessage(marketError)}`);
       }
     }
 
     // Filter by date range (markets ending within maxDaysAhead)
     const now = new Date();
-    const maxDate = new Date(now.getTime() + config.marketMaxDaysAhead * 24 * 60 * 60 * 1000);
+    const maxDaysAhead = config?.marketMaxDaysAhead ?? 7;
+    const maxDate = new Date(now.getTime() + maxDaysAhead * 24 * 60 * 60 * 1000);
 
     const filteredMarkets = markets.filter(market => {
-      const endDate = new Date(market.endDate);
-      return endDate >= now && endDate <= maxDate;
+      if (!market?.endDate) return false;
+      try {
+        const endDate = new Date(market.endDate);
+        return !isNaN(endDate.getTime()) && endDate >= now && endDate <= maxDate;
+      } catch {
+        return false;
+      }
     });
 
     console.log(`\nTotal Elon tweet markets found: ${filteredMarkets.length}`);
 
     // Sort by end date (nearest first)
-    filteredMarkets.sort((a, b) => new Date(a.endDate).getTime() - new Date(b.endDate).getTime());
+    filteredMarkets.sort((a, b) => {
+      const dateA = new Date(a.endDate).getTime();
+      const dateB = new Date(b.endDate).getTime();
+      return (isNaN(dateA) ? 0 : dateA) - (isNaN(dateB) ? 0 : dateB);
+    });
 
     return filteredMarkets;
 
   } catch (error) {
-    console.error('Error querying Elon tweet markets:', error);
-    throw error;
+    console.error(`Error querying Elon tweet markets: ${getErrorMessage(error)}`);
+    return []; // Return empty array instead of throwing
   }
 }
 
@@ -415,18 +495,32 @@ function generateElonTweetSlugs(): string[] {
  */
 export async function refreshMarketData(marketId: string): Promise<ElonTweetMarket | null> {
   try {
-    const response = await fetch(`${GAMMA_API_URL}/markets/${marketId}`);
+    const response = await fetchWithRetry(
+      `${GAMMA_API_URL}/markets/${marketId}`,
+      undefined,
+      { maxRetries: 2, retryOn429: true }
+    );
+
+    if (!response) {
+      console.log(`  Failed to refresh market ${marketId}: no response after retries`);
+      return null;
+    }
 
     if (!response.ok) {
       console.log(`  Failed to refresh market ${marketId}: ${response.status}`);
       return null;
     }
 
-    const market = await response.json();
-    return parseMarketData(market);
+    try {
+      const market = await response.json();
+      return parseMarketData(market);
+    } catch (parseError) {
+      console.log(`  Failed to parse market ${marketId} response: ${getErrorMessage(parseError)}`);
+      return null;
+    }
 
   } catch (error) {
-    console.error(`Error refreshing market ${marketId}:`, error);
+    console.error(`  Error refreshing market ${marketId}: ${getErrorMessage(error)}`);
     return null;
   }
 }
