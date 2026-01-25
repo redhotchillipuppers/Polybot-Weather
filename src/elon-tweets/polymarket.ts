@@ -247,43 +247,38 @@ function parseMarketData(market: any, eventData?: any): ElonTweetMarket | null {
  */
 export async function queryElonTweetMarkets(config: ElonTweetConfig): Promise<ElonTweetMarket[]> {
   const markets: ElonTweetMarket[] = [];
+  const seenIds = new Set<string>();
 
   console.log('Searching for Elon Musk tweet markets...');
 
   try {
-    // Strategy 1: Search events for Elon tweet markets
-    console.log('  Fetching events from Polymarket...');
-    const eventsResponse = await fetch(`${GAMMA_API_URL}/events?limit=200&active=true`);
+    // Strategy 1: Direct search with "elon musk tweets" query
+    console.log('  Searching with query: "elon musk tweets"...');
+    const searchResponse = await fetch(
+      `${GAMMA_API_URL}/events?limit=100&active=true&closed=false&title_contains=elon`
+    );
 
-    if (eventsResponse.ok) {
-      const eventsData = await eventsResponse.json();
-      const events = Array.isArray(eventsData) ? eventsData : (eventsData.data || []);
+    if (searchResponse.ok) {
+      const searchData = await searchResponse.json();
+      const events = Array.isArray(searchData) ? searchData : (searchData.data || []);
+      console.log(`  Found ${events.length} events containing "elon"`);
 
-      console.log(`  Found ${events.length} active events`);
+      for (const event of events) {
+        const title = (event.title || '').toLowerCase();
+        // Check if it's a tweet count market
+        if (title.includes('tweet') && (title.includes('#') || title.includes('number'))) {
+          console.log(`  Found tweet market event: "${event.title}"`);
 
-      // Filter for Elon tweet events
-      const elonEvents = events.filter((e: any) => {
-        const title = (e.title || '').toLowerCase();
-        const description = (e.description || '').toLowerCase();
-        const combined = title + ' ' + description;
-
-        return (combined.includes('elon') || combined.includes('musk')) &&
-               (combined.includes('tweet') || combined.includes('post'));
-      });
-
-      console.log(`  Found ${elonEvents.length} Elon-related events`);
-
-      // Extract markets from events
-      for (const event of elonEvents) {
-        console.log(`  Processing event: "${event.title}"`);
-
-        if (event.markets && Array.isArray(event.markets)) {
-          for (const market of event.markets) {
-            if (isElonTweetMarket(market)) {
-              const parsed = parseMarketData(market, event);
-              if (parsed) {
-                markets.push(parsed);
-                console.log(`    Added market: ${parsed.question.substring(0, 60)}...`);
+          if (event.markets && Array.isArray(event.markets)) {
+            for (const market of event.markets) {
+              const marketId = market.id || market.condition_id;
+              if (marketId && !seenIds.has(marketId)) {
+                seenIds.add(marketId);
+                const parsed = parseMarketData(market, event);
+                if (parsed) {
+                  markets.push(parsed);
+                  console.log(`    Added bracket: ${parsed.question.substring(0, 60)}...`);
+                }
               }
             }
           }
@@ -291,23 +286,56 @@ export async function queryElonTweetMarkets(config: ElonTweetConfig): Promise<El
       }
     }
 
-    // Strategy 2: Direct market search (fallback)
+    // Strategy 2: Try fetching specific event slugs based on known patterns
+    console.log('  Trying known slug patterns...');
+    const slugPatterns = generateElonTweetSlugs();
+
+    for (const slug of slugPatterns) {
+      try {
+        const eventResponse = await fetch(`${GAMMA_API_URL}/events/slug/${slug}`);
+        if (eventResponse.ok) {
+          const event = await eventResponse.json();
+          console.log(`  Found event via slug: "${event.title}"`);
+
+          if (event.markets && Array.isArray(event.markets)) {
+            for (const market of event.markets) {
+              const marketId = market.id || market.condition_id;
+              if (marketId && !seenIds.has(marketId)) {
+                seenIds.add(marketId);
+                const parsed = parseMarketData(market, event);
+                if (parsed) {
+                  markets.push(parsed);
+                  console.log(`    Added bracket: ${parsed.question.substring(0, 60)}...`);
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Slug not found, continue
+      }
+    }
+
+    // Strategy 3: Search markets directly
     if (markets.length === 0) {
       console.log('  Trying direct market search...');
+      const queries = ['elon tweets', 'elon musk tweets', 'musk tweets'];
 
-      for (const keyword of config.marketSearchKeywords.slice(0, 2)) {
-        const searchResponse = await fetch(
-          `${GAMMA_API_URL}/markets?limit=100&closed=false&q=${encodeURIComponent(keyword)}`
+      for (const query of queries) {
+        const marketResponse = await fetch(
+          `${GAMMA_API_URL}/markets?limit=100&closed=false`
         );
 
-        if (searchResponse.ok) {
-          const searchData = await searchResponse.json();
-          const searchMarkets = Array.isArray(searchData) ? searchData : (searchData.data || []);
+        if (marketResponse.ok) {
+          const marketData = await marketResponse.json();
+          const allMarkets = Array.isArray(marketData) ? marketData : (marketData.data || []);
 
-          for (const market of searchMarkets) {
-            if (isElonTweetMarket(market)) {
-              // Check if we already have this market
-              if (!markets.some(m => m.id === market.id)) {
+          for (const market of allMarkets) {
+            const question = (market.question || market.title || '').toLowerCase();
+            if (question.includes('elon') && question.includes('tweet')) {
+              const marketId = market.id || market.condition_id;
+              if (marketId && !seenIds.has(marketId)) {
+                seenIds.add(marketId);
                 const parsed = parseMarketData(market);
                 if (parsed) {
                   markets.push(parsed);
@@ -340,6 +368,41 @@ export async function queryElonTweetMarkets(config: ElonTweetConfig): Promise<El
     console.error('Error querying Elon tweet markets:', error);
     throw error;
   }
+}
+
+/**
+ * Generate potential slug patterns for Elon tweet markets
+ */
+function generateElonTweetSlugs(): string[] {
+  const slugs: string[] = [];
+  const now = new Date();
+
+  // Generate slugs for the next 14 days worth of potential markets
+  for (let startOffset = -7; startOffset <= 7; startOffset++) {
+    for (let duration = 1; duration <= 7; duration++) {
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() + startOffset);
+
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + duration);
+
+      const startMonth = startDate.toLocaleString('en-US', { month: 'long' }).toLowerCase();
+      const startDay = startDate.getDate();
+      const endMonth = endDate.toLocaleString('en-US', { month: 'long' }).toLowerCase();
+      const endDay = endDate.getDate();
+
+      // Pattern: elon-musk-of-tweets-january-20-january-27
+      if (startMonth === endMonth) {
+        slugs.push(`elon-musk-of-tweets-${startMonth}-${startDay}-${startMonth}-${endDay}`);
+        slugs.push(`elon-musk-tweets-${startMonth}-${startDay}-${startMonth}-${endDay}`);
+      } else {
+        slugs.push(`elon-musk-of-tweets-${startMonth}-${startDay}-${endMonth}-${endDay}`);
+        slugs.push(`elon-musk-tweets-${startMonth}-${startDay}-${endMonth}-${endDay}`);
+      }
+    }
+  }
+
+  return slugs;
 }
 
 /**
