@@ -23,7 +23,7 @@ const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 
 // Temperature similarity threshold (in °C) - temperatures within this range are considered "similar"
-const TEMPERATURE_SIMILARITY_THRESHOLD = 0.5;
+const TEMPERATURE_SIMILARITY_THRESHOLD = 0.3;
 
 // MarketSnapshot is imported from types.ts
 
@@ -488,7 +488,7 @@ async function checkWeatherForecast(): Promise<void> {
 
     // Check if temperatures are similar to last check
     if (areForecastsSimilar(previousForecasts, newForecasts)) {
-      console.log('  No change - temperatures similar to last check (within ±0.5°C)');
+      console.log('  No change - temperatures similar to last check (within ±0.3°C)');
       // Update the stored forecasts but don't log full entry
       latestWeatherForecasts = newForecasts;
       return;
