@@ -30,6 +30,8 @@ interface MarketSnapshot {
   prices: number[];
   yesPrice: number | null;
   endDate: string;
+  volume: number;
+  liquidity: number;
 }
 
 interface MonitoringEntry {
@@ -68,6 +70,8 @@ function marketToSnapshot(market: PolymarketMarket): MarketSnapshot {
       prices: [],
       yesPrice: null,
       endDate: '',
+      volume: 0,
+      liquidity: 0,
     };
   }
 
@@ -94,6 +98,8 @@ function marketToSnapshot(market: PolymarketMarket): MarketSnapshot {
     prices: prices.map(p => typeof p === 'number' && !isNaN(p) ? p : 0),
     yesPrice,
     endDate: String(market.endDate ?? ''),
+    volume: typeof market.volume === 'number' && !isNaN(market.volume) ? market.volume : 0,
+    liquidity: typeof market.liquidity === 'number' && !isNaN(market.liquidity) ? market.liquidity : 0,
   };
 }
 
@@ -170,9 +176,15 @@ async function checkMarketOdds(): Promise<void> {
         const yesPercentage = snapshot.yesPrice !== null
           ? (snapshot.yesPrice * 100).toFixed(1) + '%'
           : 'N/A';
+        const volumeStr = snapshot.volume > 0
+          ? `$${snapshot.volume.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+          : 'N/A';
+        const liquidityStr = snapshot.liquidity > 0
+          ? `$${snapshot.liquidity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+          : 'N/A';
         const question = formatForLog(market.question, 'Unknown market');
         console.log(`    ${index + 1}. ${question}`);
-        console.log(`       YES price: ${yesPercentage}`);
+        console.log(`       YES price: ${yesPercentage} | Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
       });
     }
 

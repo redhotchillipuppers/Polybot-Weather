@@ -254,12 +254,18 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         prices = outcomes.map(() => 0);
       }
 
+      // Extract volume and liquidity with fallbacks
+      const volume = market?.volume ?? market?.volumeNum ?? market?.total_volume ?? 0;
+      const liquidity = market?.liquidity ?? market?.liquidityNum ?? market?.total_liquidity ?? 0;
+
       return {
         id: String(market?.id || market?.condition_id || market?.market_id || 'unknown'),
         question: String(market?.question || market?.title || market?.description || 'Unknown market'),
         outcomes,
         prices,
-        endDate: String(market?.end_date_iso || market?.end_date || market?.endDate || market?.close_time || market?.closeTime || '')
+        endDate: String(market?.end_date_iso || market?.end_date || market?.endDate || market?.close_time || market?.closeTime || ''),
+        volume: typeof volume === 'number' && !isNaN(volume) ? volume : 0,
+        liquidity: typeof liquidity === 'number' && !isNaN(liquidity) ? liquidity : 0
       };
     });
   } catch (error) {
