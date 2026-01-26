@@ -21,6 +21,7 @@
   "dependencies": {
     "@polymarket/clob-client": "^5.2.1",
     "dotenv": "^17.2.3",
-    "ethers": "^5.7.2"
+    "ethers": "^5.7.2",
+    "jstat": "^1.9.6"
   }
 }
