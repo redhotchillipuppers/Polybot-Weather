@@ -16,3 +16,24 @@ export interface PolymarketMarket {
   volume: number;
   liquidity: number;
 }
+
+export interface MarketSnapshot {
+  marketId: string;
+  question: string;
+  temperatureValue: string | null;
+  outcomes: string[];
+  prices: number[];
+  yesPrice: number | null;
+  endDate: string;
+  volume: number;
+  liquidity: number;
+  modelProbability: number | null;
+  edge: number | null;
+  edgePercent: number | null;
+  signal: 'BUY' | 'SELL' | 'HOLD' | null;
+}
+
+export interface ParsedMarketQuestion {
+  bracketType: 'or_higher' | 'or_below' | 'exact';
+  bracketValue: number;
+}
