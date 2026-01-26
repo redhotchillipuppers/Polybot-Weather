@@ -244,8 +244,10 @@ async function checkMarketOdds(): Promise<void> {
           const yesPercentage = snapshot.yesPrice !== null
             ? (snapshot.yesPrice * 100).toFixed(1) + '%'
             : 'N/A';
+          const volumeStr = snapshot.volume > 0 ? `$${snapshot.volume.toLocaleString()}` : 'N/A';
+          const liquidityStr = snapshot.liquidity > 0 ? `$${snapshot.liquidity.toLocaleString()}` : 'N/A';
           console.log(`    ${index + 1}. ${snapshot.question}`);
-          console.log(`       YES price: ${yesPercentage}`);
+          console.log(`       YES price: ${yesPercentage} | Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
         } else {
           console.log(`    ${index + 1}. [Invalid market data]`);
         }
