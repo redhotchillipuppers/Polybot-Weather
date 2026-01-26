@@ -219,6 +219,13 @@ function marketToSnapshot(
 
     // Debug logging
     console.log(`    DEBUG: question="${question.substring(0, 50)}..."`);
+    // Show character codes around "on" to detect invisible characters
+    const onIndex = question.toLowerCase().indexOf(' on ');
+    if (onIndex !== -1) {
+      const snippet = question.substring(onIndex, onIndex + 20);
+      const charCodes = [...snippet].map(c => c.charCodeAt(0)).join(',');
+      console.log(`    DEBUG: snippet around 'on': "${snippet}" | charCodes: [${charCodes}]`);
+    }
     console.log(`    DEBUG: parsedQuestion=${JSON.stringify(parsedQuestion)}, marketDateStr=${marketDateStr}`);
     console.log(`    DEBUG: weatherForecasts count=${weatherForecasts.length}`);
 
