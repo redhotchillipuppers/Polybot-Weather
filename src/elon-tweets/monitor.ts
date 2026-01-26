@@ -28,6 +28,8 @@ import {
   testXApiConnection
 } from './x-api.js';
 
+import { getErrorMessage, formatForLog } from '../api-utils.js';
+
 import type {
   ElonTweetConfig,
   ElonTweetMarket,
@@ -62,7 +64,7 @@ function readLogFile(): MonitoringEntry[] {
       return JSON.parse(content);
     }
   } catch (error) {
-    console.error('Error reading log file, starting fresh:', error);
+    console.error(`Error reading log file, starting fresh: ${getErrorMessage(error)}`);
   }
   return [];
 }
@@ -79,7 +81,7 @@ function appendToLog(entry: MonitoringEntry): void {
     fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8');
     console.log(`  Logged to: ${path.basename(logPath)}`);
   } catch (error) {
-    console.error('Error writing to log file:', error);
+    console.error(`Error writing to log file: ${getErrorMessage(error)}`);
   }
 }
 
@@ -551,6 +553,6 @@ async function startMonitoring(): Promise<void> {
 // ============================================================================
 
 startMonitoring().catch((error) => {
-  console.error('Fatal error starting monitoring:', error);
+  console.error(`Fatal error starting monitoring: ${getErrorMessage(error)}`);
   process.exit(1);
 });

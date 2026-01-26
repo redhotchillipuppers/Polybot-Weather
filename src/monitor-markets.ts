@@ -5,14 +5,15 @@ import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
 import type { WeatherForecast, PolymarketMarket } from './types.js';
+import { getErrorMessage, formatForLog } from './api-utils.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
 // Load environment variables
 dotenv.config();
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY!;
-const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY!;
+const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY;
 const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
@@ -52,30 +53,47 @@ function getLogFilePath(): string {
 function extractTemperatureFromQuestion(question: string): string | null {
   // Match patterns like "8°C or higher", "below 5°C", "7°C to 9°C"
   const tempMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C/i);
-  return tempMatch ? tempMatch[1] : null;
+  return tempMatch && tempMatch[1] ? tempMatch[1] : null;
 }
 
-// Convert market to snapshot format
+// Convert market to snapshot format with null safety
 function marketToSnapshot(market: PolymarketMarket): MarketSnapshot {
+  // Handle null/undefined market
+  if (!market) {
+    return {
+      marketId: 'unknown',
+      question: 'Unknown market',
+      temperatureValue: null,
+      outcomes: [],
+      prices: [],
+      yesPrice: null,
+      endDate: '',
+    };
+  }
+
+  const outcomes = market.outcomes ?? [];
+  const prices = market.prices ?? [];
+
   // Find YES price (typically first outcome or explicit "Yes")
   let yesPrice: number | null = null;
-  const yesIndex = market.outcomes.findIndex(o =>
-    o.toLowerCase() === 'yes' || o.toLowerCase().includes('yes')
+  const yesIndex = outcomes.findIndex(o =>
+    o?.toLowerCase() === 'yes' || o?.toLowerCase().includes('yes')
   );
-  if (yesIndex !== -1 && market.prices[yesIndex] !== undefined) {
-    yesPrice = market.prices[yesIndex];
-  } else if (market.prices.length > 0) {
-    yesPrice = market.prices[0]; // Default to first price
+  if (yesIndex !== -1 && prices[yesIndex] !== undefined) {
+    const price = prices[yesIndex];
+    yesPrice = typeof price === 'number' && !isNaN(price) ? price : null;
+  } else if (prices.length > 0 && typeof prices[0] === 'number' && !isNaN(prices[0])) {
+    yesPrice = prices[0]; // Default to first price
   }
 
   return {
-    marketId: market.id,
-    question: market.question,
-    temperatureValue: extractTemperatureFromQuestion(market.question),
-    outcomes: market.outcomes,
-    prices: market.prices,
+    marketId: String(market.id ?? 'unknown'),
+    question: String(market.question ?? 'Unknown market'),
+    temperatureValue: extractTemperatureFromQuestion(market.question ?? ''),
+    outcomes: outcomes.map(o => String(o ?? 'Unknown')),
+    prices: prices.map(p => typeof p === 'number' && !isNaN(p) ? p : 0),
     yesPrice,
-    endDate: market.endDate,
+    endDate: String(market.endDate ?? ''),
   };
 }
 
@@ -84,11 +102,15 @@ function extractUniqueDatesFromMarkets(markets: PolymarketMarket[]): Date[] {
   const dateStrings = new Set<string>();
 
   for (const market of markets) {
-    if (market.endDate) {
+    if (market?.endDate) {
       // Parse the end date and normalize to just the date portion
       const endDate = new Date(market.endDate);
-      const dateStr = endDate.toISOString().split('T')[0];
-      dateStrings.add(dateStr);
+      if (!isNaN(endDate.getTime())) {
+        const dateStr = endDate.toISOString().split('T')[0] ?? '';
+        if (dateStr) {
+          dateStrings.add(dateStr);
+        }
+      }
     }
   }
 
@@ -132,22 +154,24 @@ function formatTimestamp(): string {
 // Check market odds (runs every 15 minutes)
 async function checkMarketOdds(): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[$${timestamp}] Checking market odds...`);
+  console.log(`\n[${timestamp}] Checking market odds...`);
 
   try {
     const markets = await queryLondonTemperatureMarkets();
 
-    if (markets.length === 0) {
+    if (!markets || markets.length === 0) {
       console.log('  No London temperature markets found.');
     } else {
       console.log(`  Found ${markets.length} market(s):`);
 
       markets.forEach((market, index) => {
+        if (!market) return;
         const snapshot = marketToSnapshot(market);
         const yesPercentage = snapshot.yesPrice !== null
           ? (snapshot.yesPrice * 100).toFixed(1) + '%'
           : 'N/A';
-        console.log(`    ${index + 1}. ${market.question}`);
+        const question = formatForLog(market.question, 'Unknown market');
+        console.log(`    ${index + 1}. ${question}`);
         console.log(`       YES price: ${yesPercentage}`);
       });
     }
@@ -158,13 +182,13 @@ async function checkMarketOdds(): Promise<void> {
       entryType: 'market_check',
       weatherForecast: latestWeatherForecasts[0] ?? null,
       weatherForecasts: latestWeatherForecasts,
-      markets: markets.map(marketToSnapshot),
+      markets: (markets ?? []).filter(m => m != null).map(marketToSnapshot),
     };
 
     appendToLog(entry);
 
   } catch (error) {
-    console.error('  Error checking market odds:', error instanceof Error ? error.message : error);
+    console.error(`  Error checking market odds: ${getErrorMessage(error)}`);
   }
 }
 
@@ -173,27 +197,37 @@ async function checkWeatherForecast(): Promise<void> {
   const timestamp = formatTimestamp();
   console.log(`\n[${timestamp}] Fetching weather forecasts...`);
 
+  if (!OPENWEATHER_API_KEY) {
+    console.error('  Cannot fetch weather: OPENWEATHER_API_KEY not set');
+    return;
+  }
+
   try {
     // First, fetch markets to know what dates we need weather for
     const markets = await queryLondonTemperatureMarkets();
 
     // Extract unique dates from market end dates
-    const marketDates = extractUniqueDatesFromMarkets(markets);
+    const marketDates = extractUniqueDatesFromMarkets(markets ?? []);
 
     if (marketDates.length === 0) {
       console.log('  No market dates found, skipping weather fetch.');
       return;
     }
 
-    console.log(`  Market dates found: ${marketDates.map(d => d.toISOString().split('T')[0]).join(', ')}`);
+    console.log(`  Market dates found: ${marketDates.map(d => d.toISOString().split('T')[0] ?? 'unknown').join(', ')}`);
 
     // Fetch weather for each market date
     const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
-    latestWeatherForecasts = forecasts;
+    latestWeatherForecasts = forecasts ?? [];
 
     console.log(`  Fetched weather for ${forecasts.length} date(s):`);
     for (const forecast of forecasts) {
-      console.log(`    ${forecast.date}: max ${forecast.maxTemperature}°C, min ${forecast.minTemperature}°C (${forecast.description})`);
+      if (!forecast) continue;
+      const date = formatForLog(forecast.date, 'Unknown');
+      const maxTemp = formatForLog(forecast.maxTemperature, 'N/A');
+      const minTemp = formatForLog(forecast.minTemperature, 'N/A');
+      const desc = formatForLog(forecast.description, 'No description');
+      console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C (${desc})`);
     }
 
     const entry: MonitoringEntry = {
@@ -201,40 +235,50 @@ async function checkWeatherForecast(): Promise<void> {
       entryType: 'weather_check',
       weatherForecast: forecasts[0] ?? null,
       weatherForecasts: forecasts,
-      markets: markets.map(marketToSnapshot),
+      markets: (markets ?? []).filter(m => m != null).map(marketToSnapshot),
     };
 
     appendToLog(entry);
 
   } catch (error) {
-    console.error('  Error fetching weather forecast:', error instanceof Error ? error.message : error);
+    console.error(`  Error fetching weather forecast: ${getErrorMessage(error)}`);
   }
 }
 
 // Initialize wallet and trading client
-async function initializeClient(): Promise<ClobClient> {
+async function initializeClient(): Promise<ClobClient | null> {
   console.log('Initializing wallet and trading client...');
 
-  // Create wallet
-  const wallet = new Wallet(PRIVATE_KEY);
-  console.log('  Wallet address:', wallet.address);
+  if (!PRIVATE_KEY) {
+    console.error('  Cannot initialize client: PRIVATE_KEY not set');
+    return null;
+  }
 
-  // Create temp client to get API credentials
-  const tempClient = new ClobClient(HOST, CHAIN_ID, wallet);
-  const apiCreds = await tempClient.createOrDeriveApiKey();
+  try {
+    // Create wallet
+    const wallet = new Wallet(PRIVATE_KEY);
+    console.log('  Wallet address:', wallet.address);
 
-  // Create real trading client
-  const signatureType = 0;
-  const client = new ClobClient(
-    HOST,
-    CHAIN_ID,
-    wallet,
-    apiCreds,
-    signatureType
-  );
+    // Create temp client to get API credentials
+    const tempClient = new ClobClient(HOST, CHAIN_ID, wallet);
+    const apiCreds = await tempClient.createOrDeriveApiKey();
 
-  console.log('  Trading client initialized successfully!');
-  return client;
+    // Create real trading client
+    const signatureType = 0;
+    const client = new ClobClient(
+      HOST,
+      CHAIN_ID,
+      wallet,
+      apiCreds,
+      signatureType
+    );
+
+    console.log('  Trading client initialized successfully!');
+    return client;
+  } catch (error) {
+    console.error(`  Error initializing trading client: ${getErrorMessage(error)}`);
+    return null;
+  }
 }
 
 // Main monitoring function
@@ -249,11 +293,8 @@ async function startMonitoring(): Promise<void> {
   console.log('='.repeat(60));
 
   // Initialize trading client (for future trading functionality)
-  let client: ClobClient | null = null;
-  try {
-    client = await initializeClient();
-  } catch (error) {
-    console.error('Warning: Failed to initialize trading client:', error instanceof Error ? error.message : error);
+  const client = await initializeClient();
+  if (!client) {
     console.log('Continuing with monitoring only (no trading capabilities)...');
   }
 
@@ -297,6 +338,6 @@ async function startMonitoring(): Promise<void> {
 
 // Run the monitoring
 startMonitoring().catch((error) => {
-  console.error('Fatal error starting monitoring:', error);
+  console.error(`Fatal error starting monitoring: ${getErrorMessage(error)}`);
   process.exit(1);
 });
