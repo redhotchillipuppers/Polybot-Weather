@@ -50,12 +50,13 @@ function extractTemperatureFromQuestion(question: string): string | null {
 }
 
 // Parse market question to extract bracket type and value
+// Note: Uses flexible regex to handle different Unicode degree symbols (°, º, etc.)
 function parseMarketQuestion(question: string): ParsedMarketQuestion | null {
   if (!question) return null;
 
   try {
-    // Pattern: "X°C or higher"
-    const orHigherMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C\s+or\s+higher/i);
+    // Pattern: "X°C or higher" - flexible degree symbol matching
+    const orHigherMatch = question.match(/(\d+(?:\.\d+)?)[°º\s]*C\s+or\s+higher/i);
     if (orHigherMatch && orHigherMatch[1]) {
       return {
         bracketType: 'or_higher',
@@ -63,8 +64,8 @@ function parseMarketQuestion(question: string): ParsedMarketQuestion | null {
       };
     }
 
-    // Pattern: "X°C or below"
-    const orBelowMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C\s+or\s+below/i);
+    // Pattern: "X°C or below" - flexible degree symbol matching
+    const orBelowMatch = question.match(/(\d+(?:\.\d+)?)[°º\s]*C\s+or\s+below/i);
     if (orBelowMatch && orBelowMatch[1]) {
       return {
         bracketType: 'or_below',
@@ -74,7 +75,7 @@ function parseMarketQuestion(question: string): ParsedMarketQuestion | null {
 
     // Pattern: exact temperature "X°C" (without "or higher" or "or below")
     // Must match "be X°C on" to distinguish from other temperature mentions
-    const exactMatch = question.match(/be\s+(\d+(?:\.\d+)?)\s*°?C\s+on/i);
+    const exactMatch = question.match(/be\s+(\d+(?:\.\d+)?)[°º\s]*C\s+on/i);
     if (exactMatch && exactMatch[1]) {
       return {
         bracketType: 'exact',
