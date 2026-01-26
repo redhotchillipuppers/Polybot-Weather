@@ -96,8 +96,9 @@ function extractDateFromQuestion(question: string): string | null {
 
   try {
     // Pattern: "on Month Day" (e.g., "on January 27")
+    // Using \b word boundary to avoid matching "on" in "London"
     // Using more flexible whitespace matching [\s\u00A0]+ to handle non-breaking spaces
-    const dateMatch = question.match(/on[\s\u00A0]+(\w+)[\s\u00A0]+(\d{1,2})/i);
+    const dateMatch = question.match(/\bon[\s\u00A0]+(January|February|March|April|May|June|July|August|September|October|November|December)[\s\u00A0]+(\d{1,2})/i);
 
     console.log(`      extractDate: dateMatch=${JSON.stringify(dateMatch)}`);
 
