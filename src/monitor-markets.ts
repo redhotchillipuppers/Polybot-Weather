@@ -4,8 +4,9 @@ import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
-import type { WeatherForecast, PolymarketMarket } from './types.js';
+import type { WeatherForecast, PolymarketMarket, MarketSnapshot, ParsedMarketQuestion } from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
+import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge } from './probability-model.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -21,18 +22,7 @@ const CHAIN_ID = 137;
 const MARKET_CHECK_MINUTES = [0, 20, 40]; // Run at :00, :20, :40
 const WEATHER_CHECK_MINUTES = [0]; // Run on the hour only
 
-// Data structure for logging
-interface MarketSnapshot {
-  marketId: string;
-  question: string;
-  temperatureValue: string | null; // Extracted temperature from question
-  outcomes: string[];
-  prices: number[];
-  yesPrice: number | null;
-  endDate: string;
-  volume: number;
-  liquidity: number;
-}
+// MarketSnapshot is imported from types.ts
 
 interface MonitoringEntry {
   timestamp: string;
@@ -59,8 +49,107 @@ function extractTemperatureFromQuestion(question: string): string | null {
   return tempMatch && tempMatch[1] ? tempMatch[1] : null;
 }
 
+// Parse market question to extract bracket type and value
+function parseMarketQuestion(question: string): ParsedMarketQuestion | null {
+  if (!question) return null;
+
+  try {
+    // Pattern: "X°C or higher"
+    const orHigherMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C\s+or\s+higher/i);
+    if (orHigherMatch && orHigherMatch[1]) {
+      return {
+        bracketType: 'or_higher',
+        bracketValue: parseFloat(orHigherMatch[1]),
+      };
+    }
+
+    // Pattern: "X°C or below"
+    const orBelowMatch = question.match(/(\d+(?:\.\d+)?)\s*°?C\s+or\s+below/i);
+    if (orBelowMatch && orBelowMatch[1]) {
+      return {
+        bracketType: 'or_below',
+        bracketValue: parseFloat(orBelowMatch[1]),
+      };
+    }
+
+    // Pattern: exact temperature "X°C" (without "or higher" or "or below")
+    // Must match "be X°C on" to distinguish from other temperature mentions
+    const exactMatch = question.match(/be\s+(\d+(?:\.\d+)?)\s*°?C\s+on/i);
+    if (exactMatch && exactMatch[1]) {
+      return {
+        bracketType: 'exact',
+        bracketValue: parseFloat(exactMatch[1]),
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.warn(`Failed to parse market question: ${formatError(error)}`);
+    return null;
+  }
+}
+
+// Extract date from market question (e.g., "on January 27" -> "2026-01-27")
+function extractDateFromQuestion(question: string): string | null {
+  if (!question) return null;
+
+  try {
+    // Pattern: "on Month Day" (e.g., "on January 27")
+    const dateMatch = question.match(/on\s+(\w+)\s+(\d{1,2})/i);
+    if (dateMatch && dateMatch[1] && dateMatch[2]) {
+      const monthName = dateMatch[1];
+      const day = parseInt(dateMatch[2], 10);
+
+      // Convert month name to number
+      const months: Record<string, number> = {
+        january: 0, february: 1, march: 2, april: 3,
+        may: 4, june: 5, july: 6, august: 7,
+        september: 8, october: 9, november: 10, december: 11,
+      };
+
+      const monthNum = months[monthName.toLowerCase()];
+      if (monthNum === undefined || isNaN(day)) {
+        return null;
+      }
+
+      // Assume current year, or next year if the date has passed
+      const now = new Date();
+      let year = now.getFullYear();
+      const testDate = new Date(year, monthNum, day);
+
+      // If the date is in the past, use next year
+      if (testDate < now) {
+        year += 1;
+      }
+
+      // Format as YYYY-MM-DD
+      const monthStr = String(monthNum + 1).padStart(2, '0');
+      const dayStr = String(day).padStart(2, '0');
+      return `${year}-${monthStr}-${dayStr}`;
+    }
+
+    return null;
+  } catch (error) {
+    console.warn(`Failed to extract date from question: ${formatError(error)}`);
+    return null;
+  }
+}
+
+// Find matching weather forecast for a given date string
+function findForecastForDate(dateStr: string, forecasts: WeatherForecast[]): WeatherForecast | null {
+  if (!dateStr || !forecasts || forecasts.length === 0) {
+    return null;
+  }
+
+  // Try to match by date string (YYYY-MM-DD format)
+  return forecasts.find(f => f.date === dateStr) ?? null;
+}
+
 // Convert market to snapshot format with null-safe handling
-function marketToSnapshot(market: PolymarketMarket | null | undefined): MarketSnapshot | null {
+function marketToSnapshot(
+  market: PolymarketMarket | null | undefined,
+  weatherForecasts: WeatherForecast[] = []
+): MarketSnapshot | null {
   if (!market) {
     return null;
   }
@@ -81,6 +170,47 @@ function marketToSnapshot(market: PolymarketMarket | null | undefined): MarketSn
       yesPrice = prices[0] ?? null; // Default to first price
     }
 
+    // Calculate model probability and edge
+    let modelProbability: number | null = null;
+    let edge: number | null = null;
+    let edgePercent: number | null = null;
+    let signal: 'BUY' | 'SELL' | 'HOLD' | null = null;
+
+    // Parse the market question to get bracket type and value
+    const parsedQuestion = parseMarketQuestion(question);
+    const marketDateStr = extractDateFromQuestion(question);
+
+    if (parsedQuestion && marketDateStr) {
+      // Find matching weather forecast for this market's date
+      const forecast = findForecastForDate(marketDateStr, weatherForecasts);
+
+      if (forecast) {
+        // Calculate hours until resolution using endDate
+        const endDate = safeString(market.endDate, '');
+        const hoursUntilResolution = endDate ? calculateHoursUntilResolution(endDate) : 0;
+
+        // Calculate model probability using the forecast max temperature
+        modelProbability = calculateMarketProbability(
+          forecast.maxTemperature,
+          hoursUntilResolution,
+          parsedQuestion.bracketType,
+          parsedQuestion.bracketValue
+        );
+
+        // Calculate edge if we have both model probability and market price
+        if (modelProbability !== null && yesPrice !== null) {
+          const edgeAnalysis = analyzeEdge(modelProbability, yesPrice);
+          edge = edgeAnalysis.edge;
+          edgePercent = edgeAnalysis.edgePercent;
+          signal = edgeAnalysis.signal;
+        }
+      } else {
+        console.warn(`  No weather forecast found for date: ${marketDateStr}`);
+      }
+    } else if (!parsedQuestion) {
+      console.warn(`  Could not parse market question: ${question.substring(0, 50)}...`);
+    }
+
     return {
       marketId: safeString(market.id, 'unknown'),
       question,
@@ -91,6 +221,10 @@ function marketToSnapshot(market: PolymarketMarket | null | undefined): MarketSn
       endDate: safeString(market.endDate, ''),
       volume: safeNumber(market.volume, 0),
       liquidity: safeNumber(market.liquidity, 0),
+      modelProbability,
+      edge,
+      edgePercent,
+      signal,
     };
   } catch (error) {
     console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);
@@ -239,15 +373,35 @@ async function checkMarketOdds(): Promise<void> {
       console.log(`  Found ${markets.length} market(s):`);
 
       markets.forEach((market, index) => {
-        const snapshot = marketToSnapshot(market);
+        const snapshot = marketToSnapshot(market, latestWeatherForecasts);
         if (snapshot) {
-          const yesPercentage = snapshot.yesPrice !== null
+          // Format market price
+          const marketPercentage = snapshot.yesPrice !== null
             ? (snapshot.yesPrice * 100).toFixed(1) + '%'
             : 'N/A';
+
+          // Format model probability
+          const modelPercentage = snapshot.modelProbability !== null
+            ? (snapshot.modelProbability * 100).toFixed(1) + '%'
+            : 'N/A';
+
+          // Format edge (only show if significant > 5%)
+          let edgeStr = '';
+          if (snapshot.edge !== null && Math.abs(snapshot.edge) > 0.05) {
+            const edgeSign = snapshot.edge >= 0 ? '+' : '';
+            edgeStr = ` | Edge: ${edgeSign}${(snapshot.edge * 100).toFixed(1)}%`;
+          }
+
+          // Format signal
+          const signalStr = snapshot.signal ? ` | Signal: ${snapshot.signal}` : '';
+
+          // Format volume and liquidity
           const volumeStr = snapshot.volume > 0 ? `$${snapshot.volume.toLocaleString()}` : 'N/A';
           const liquidityStr = snapshot.liquidity > 0 ? `$${snapshot.liquidity.toLocaleString()}` : 'N/A';
+
           console.log(`    ${index + 1}. ${snapshot.question}`);
-          console.log(`       YES price: ${yesPercentage} | Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
+          console.log(`       Market: ${marketPercentage} | Model: ${modelPercentage}${edgeStr}${signalStr}`);
+          console.log(`       Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
         } else {
           console.log(`    ${index + 1}. [Invalid market data]`);
         }
@@ -256,7 +410,7 @@ async function checkMarketOdds(): Promise<void> {
 
     // Convert markets to snapshots, filtering out null results
     const marketSnapshots = safeArray(markets)
-      .map(m => marketToSnapshot(m))
+      .map(m => marketToSnapshot(m, latestWeatherForecasts))
       .filter((s): s is MarketSnapshot => s !== null);
 
     // Log entry with current weather forecasts
@@ -311,7 +465,7 @@ async function checkWeatherForecast(): Promise<void> {
 
     // Convert markets to snapshots, filtering out null results
     const marketSnapshots = safeArray(markets)
-      .map(m => marketToSnapshot(m))
+      .map(m => marketToSnapshot(m, latestWeatherForecasts))
       .filter((s): s is MarketSnapshot => s !== null);
 
     const entry: MonitoringEntry = {
