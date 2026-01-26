@@ -181,6 +181,11 @@ function marketToSnapshot(
     const parsedQuestion = parseMarketQuestion(question);
     const marketDateStr = extractDateFromQuestion(question);
 
+    // Debug logging
+    console.log(`    DEBUG: question="${question.substring(0, 50)}..."`);
+    console.log(`    DEBUG: parsedQuestion=${JSON.stringify(parsedQuestion)}, marketDateStr=${marketDateStr}`);
+    console.log(`    DEBUG: weatherForecasts count=${weatherForecasts.length}`);
+
     if (parsedQuestion && marketDateStr) {
       // Find matching weather forecast for this market's date
       const forecast = findForecastForDate(marketDateStr, weatherForecasts);
