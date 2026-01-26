@@ -246,7 +246,9 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         endDate: safeString(
           market?.end_date_iso || market?.end_date || market?.endDate || market?.close_time || market?.closeTime,
           ''
-        )
+        ),
+        volume: safeNumber(market?.volume ?? market?.volumeNum ?? market?.total_volume, 0),
+        liquidity: safeNumber(market?.liquidity ?? market?.liquidityNum ?? market?.total_liquidity, 0),
       };
     });
   } catch (error) {

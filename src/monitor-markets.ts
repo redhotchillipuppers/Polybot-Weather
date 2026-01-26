@@ -30,6 +30,8 @@ interface MarketSnapshot {
   prices: number[];
   yesPrice: number | null;
   endDate: string;
+  volume: number;
+  liquidity: number;
 }
 
 interface MonitoringEntry {
@@ -87,6 +89,8 @@ function marketToSnapshot(market: PolymarketMarket | null | undefined): MarketSn
       prices,
       yesPrice,
       endDate: safeString(market.endDate, ''),
+      volume: safeNumber(market.volume, 0),
+      liquidity: safeNumber(market.liquidity, 0),
     };
   } catch (error) {
     console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);
