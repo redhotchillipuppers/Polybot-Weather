@@ -22,9 +22,6 @@ const CHAIN_ID = 137;
 const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 
-// Temperature similarity threshold (in °C) - temperatures within this range are considered "similar"
-const TEMPERATURE_SIMILARITY_THRESHOLD = 0.3;
-
 // MarketSnapshot is imported from types.ts
 
 interface MonitoringEntry {
@@ -260,32 +257,54 @@ function extractUniqueDatesFromMarkets(markets: PolymarketMarket[]): Date[] {
   return Array.from(dateStrings).map(dateStr => new Date(dateStr));
 }
 
-// Check if two sets of weather forecasts are similar (temperatures within threshold)
-function areForecastsSimilar(
+// Check if two sets of weather forecasts are identical (no change)
+function areForecastsIdentical(
   oldForecasts: WeatherForecast[],
   newForecasts: WeatherForecast[]
 ): boolean {
-  if (oldForecasts.length === 0 || newForecasts.length === 0) {
+  if (oldForecasts.length === 0 || oldForecasts.length !== newForecasts.length) {
     return false;
   }
 
-  // Check if all matching dates have similar temperatures
   for (const newForecast of newForecasts) {
     const oldForecast = oldForecasts.find(f => f.date === newForecast.date);
     if (!oldForecast) {
-      // New date found, not similar
       return false;
     }
 
-    const maxTempDiff = Math.abs(newForecast.maxTemperature - oldForecast.maxTemperature);
-    const minTempDiff = Math.abs(newForecast.minTemperature - oldForecast.minTemperature);
-
-    if (maxTempDiff > TEMPERATURE_SIMILARITY_THRESHOLD || minTempDiff > TEMPERATURE_SIMILARITY_THRESHOLD) {
+    if (newForecast.maxTemperature !== oldForecast.maxTemperature ||
+        newForecast.minTemperature !== oldForecast.minTemperature) {
       return false;
     }
   }
 
   return true;
+}
+
+// Get temperature changes between old and new forecasts
+function getTemperatureChanges(
+  oldForecasts: WeatherForecast[],
+  newForecasts: WeatherForecast[]
+): string[] {
+  const changes: string[] = [];
+  const timeStr = new Date().toTimeString().substring(0, 5); // HH:MM format
+
+  for (const newForecast of newForecasts) {
+    const oldForecast = oldForecasts.find(f => f.date === newForecast.date);
+    if (oldForecast) {
+      if (newForecast.maxTemperature !== oldForecast.maxTemperature) {
+        changes.push(`${newForecast.date} max: ${oldForecast.maxTemperature} --> ${newForecast.maxTemperature} at ${timeStr}`);
+      }
+      if (newForecast.minTemperature !== oldForecast.minTemperature) {
+        changes.push(`${newForecast.date} min: ${oldForecast.minTemperature} --> ${newForecast.minTemperature} at ${timeStr}`);
+      }
+    } else {
+      // New date
+      changes.push(`${newForecast.date}: max ${newForecast.maxTemperature}°C, min ${newForecast.minTemperature}°C (new)`);
+    }
+  }
+
+  return changes;
 }
 
 // Read existing log entries from file
@@ -486,25 +505,32 @@ async function checkWeatherForecast(): Promise<void> {
     const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
     const newForecasts = safeArray(forecasts);
 
-    // Check if temperatures are similar to last check
-    if (areForecastsSimilar(previousForecasts, newForecasts)) {
-      console.log('  No change - temperatures similar to last check (within ±0.3°C)');
-      // Update the stored forecasts but don't log full entry
-      latestWeatherForecasts = newForecasts;
+    // Check if temperatures are identical to last check
+    if (areForecastsIdentical(previousForecasts, newForecasts)) {
+      console.log('  No change');
       return;
     }
 
     // Update stored forecasts
     latestWeatherForecasts = newForecasts;
 
-    console.log(`  Fetched weather for ${latestWeatherForecasts.length} date(s):`);
-    for (const forecast of latestWeatherForecasts) {
-      if (forecast) {
-        const date = safeString(forecast.date, 'Unknown date');
-        const maxTemp = safeNumber(forecast.maxTemperature, 0);
-        const minTemp = safeNumber(forecast.minTemperature, 0);
-        const description = safeString(forecast.description, 'No description');
-        console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C (${description})`);
+    // Show changes in compact format if we have previous data
+    if (previousForecasts.length > 0) {
+      const changes = getTemperatureChanges(previousForecasts, newForecasts);
+      for (const change of changes) {
+        console.log(`  ${change}`);
+      }
+    } else {
+      // First run - show full details
+      console.log(`  Fetched weather for ${latestWeatherForecasts.length} date(s):`);
+      for (const forecast of latestWeatherForecasts) {
+        if (forecast) {
+          const date = safeString(forecast.date, 'Unknown date');
+          const maxTemp = safeNumber(forecast.maxTemperature, 0);
+          const minTemp = safeNumber(forecast.minTemperature, 0);
+          const description = safeString(forecast.description, 'No description');
+          console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C (${description})`);
+        }
       }
     }
 
