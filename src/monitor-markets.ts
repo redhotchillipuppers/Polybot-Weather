@@ -95,13 +95,14 @@ function extractDateFromQuestion(question: string): string | null {
   if (!question) return null;
 
   try {
-    // Pattern: "on Month Day" (e.g., "on January 27")
-    const dateMatch = question.match(/on\s+(\w+)\s+(\d{1,2})/i);
+    // Simplified: just look for "Month Day" pattern directly
+    // This avoids issues with matching "on" from "London"
+    const dateMatch = question.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})/i);
+
     if (dateMatch && dateMatch[1] && dateMatch[2]) {
       const monthName = dateMatch[1];
       const day = parseInt(dateMatch[2], 10);
 
-      // Convert month name to number
       const months: Record<string, number> = {
         january: 0, february: 1, march: 2, april: 3,
         may: 4, june: 5, july: 6, august: 7,
@@ -118,12 +119,10 @@ function extractDateFromQuestion(question: string): string | null {
       let year = now.getFullYear();
       const testDate = new Date(year, monthNum, day);
 
-      // If the date is in the past, use next year
       if (testDate < now) {
         year += 1;
       }
 
-      // Format as YYYY-MM-DD
       const monthStr = String(monthNum + 1).padStart(2, '0');
       const dayStr = String(day).padStart(2, '0');
       return `${year}-${monthStr}-${dayStr}`;
