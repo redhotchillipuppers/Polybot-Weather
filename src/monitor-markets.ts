@@ -96,7 +96,43 @@ function extractDateFromQuestion(question: string): string | null {
 
   try {
     // Pattern: "on Month Day" (e.g., "on January 27")
-    const dateMatch = question.match(/on\s+(\w+)\s+(\d{1,2})/i);
+    // Using more flexible whitespace matching [\s\u00A0]+ to handle non-breaking spaces
+    const dateMatch = question.match(/on[\s\u00A0]+(\w+)[\s\u00A0]+(\d{1,2})/i);
+
+    // Debug: log what we're trying to match
+    if (!dateMatch) {
+      // Try to find "January", "February", etc. anywhere in the string as fallback
+      const monthMatch = question.match(/(January|February|March|April|May|June|July|August|September|October|November|December)[\s\u00A0]+(\d{1,2})/i);
+      if (monthMatch && monthMatch[1] && monthMatch[2]) {
+        const monthName = monthMatch[1];
+        const day = parseInt(monthMatch[2], 10);
+
+        const months: Record<string, number> = {
+          january: 0, february: 1, march: 2, april: 3,
+          may: 4, june: 5, july: 6, august: 7,
+          september: 8, october: 9, november: 10, december: 11,
+        };
+
+        const monthNum = months[monthName.toLowerCase()];
+        if (monthNum === undefined || isNaN(day)) {
+          return null;
+        }
+
+        const now = new Date();
+        let year = now.getFullYear();
+        const testDate = new Date(year, monthNum, day);
+
+        if (testDate < now) {
+          year += 1;
+        }
+
+        const monthStr = String(monthNum + 1).padStart(2, '0');
+        const dayStr = String(day).padStart(2, '0');
+        return `${year}-${monthStr}-${dayStr}`;
+      }
+      return null;
+    }
+
     if (dateMatch && dateMatch[1] && dateMatch[2]) {
       const monthName = dateMatch[1];
       const day = parseInt(dateMatch[2], 10);
