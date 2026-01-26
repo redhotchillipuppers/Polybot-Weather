@@ -19,8 +19,11 @@ const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
 // Scheduling configuration
-const MARKET_CHECK_MINUTES = [0, 20, 40]; // Run at :00, :20, :40
-const WEATHER_CHECK_MINUTES = [0]; // Run on the hour only
+const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
+const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
+
+// Temperature similarity threshold (in °C) - temperatures within this range are considered "similar"
+const TEMPERATURE_SIMILARITY_THRESHOLD = 0.3;
 
 // MarketSnapshot is imported from types.ts
 
@@ -257,6 +260,34 @@ function extractUniqueDatesFromMarkets(markets: PolymarketMarket[]): Date[] {
   return Array.from(dateStrings).map(dateStr => new Date(dateStr));
 }
 
+// Check if two sets of weather forecasts are similar (temperatures within threshold)
+function areForecastsSimilar(
+  oldForecasts: WeatherForecast[],
+  newForecasts: WeatherForecast[]
+): boolean {
+  if (oldForecasts.length === 0 || newForecasts.length === 0) {
+    return false;
+  }
+
+  // Check if all matching dates have similar temperatures
+  for (const newForecast of newForecasts) {
+    const oldForecast = oldForecasts.find(f => f.date === newForecast.date);
+    if (!oldForecast) {
+      // New date found, not similar
+      return false;
+    }
+
+    const maxTempDiff = Math.abs(newForecast.maxTemperature - oldForecast.maxTemperature);
+    const minTempDiff = Math.abs(newForecast.minTemperature - oldForecast.minTemperature);
+
+    if (maxTempDiff > TEMPERATURE_SIMILARITY_THRESHOLD || minTempDiff > TEMPERATURE_SIMILARITY_THRESHOLD) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Read existing log entries from file
 function readLogFile(): MonitoringEntry[] {
   const logPath = getLogFilePath();
@@ -359,7 +390,7 @@ class ClockAlignedScheduler {
   }
 }
 
-// Check market odds (runs every 20 minutes)
+// Check market odds (runs every 10 minutes)
 async function checkMarketOdds(): Promise<void> {
   const timestamp = formatTimestamp();
   console.log(`\n[${timestamp}] Checking market odds...`);
@@ -429,7 +460,7 @@ async function checkMarketOdds(): Promise<void> {
   }
 }
 
-// Fetch weather forecast (runs every 60 minutes)
+// Fetch weather forecast (runs every 10 minutes)
 async function checkWeatherForecast(): Promise<void> {
   const timestamp = formatTimestamp();
   console.log(`\n[${timestamp}] Fetching weather forecasts...`);
@@ -448,9 +479,23 @@ async function checkWeatherForecast(): Promise<void> {
 
     console.log(`  Market dates found: ${marketDates.map(d => d.toISOString().split('T')[0]).join(', ')}`);
 
+    // Store previous forecasts for comparison
+    const previousForecasts = [...latestWeatherForecasts];
+
     // Fetch weather for each market date
     const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
-    latestWeatherForecasts = safeArray(forecasts);
+    const newForecasts = safeArray(forecasts);
+
+    // Check if temperatures are similar to last check
+    if (areForecastsSimilar(previousForecasts, newForecasts)) {
+      console.log('  No change - temperatures similar to last check (within ±0.3°C)');
+      // Update the stored forecasts but don't log full entry
+      latestWeatherForecasts = newForecasts;
+      return;
+    }
+
+    // Update stored forecasts
+    latestWeatherForecasts = newForecasts;
 
     console.log(`  Fetched weather for ${latestWeatherForecasts.length} date(s):`);
     for (const forecast of latestWeatherForecasts) {
