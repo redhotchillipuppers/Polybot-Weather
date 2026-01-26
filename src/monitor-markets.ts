@@ -99,10 +99,13 @@ function extractDateFromQuestion(question: string): string | null {
     // Using more flexible whitespace matching [\s\u00A0]+ to handle non-breaking spaces
     const dateMatch = question.match(/on[\s\u00A0]+(\w+)[\s\u00A0]+(\d{1,2})/i);
 
+    console.log(`      extractDate: dateMatch=${JSON.stringify(dateMatch)}`);
+
     // Debug: log what we're trying to match
     if (!dateMatch) {
       // Try to find "January", "February", etc. anywhere in the string as fallback
       const monthMatch = question.match(/(January|February|March|April|May|June|July|August|September|October|November|December)[\s\u00A0]+(\d{1,2})/i);
+      console.log(`      extractDate: fallback monthMatch=${JSON.stringify(monthMatch)}`);
       if (monthMatch && monthMatch[1] && monthMatch[2]) {
         const monthName = monthMatch[1];
         const day = parseInt(monthMatch[2], 10);
@@ -114,6 +117,7 @@ function extractDateFromQuestion(question: string): string | null {
         };
 
         const monthNum = months[monthName.toLowerCase()];
+        console.log(`      extractDate: monthName=${monthName}, day=${day}, monthNum=${monthNum}`);
         if (monthNum === undefined || isNaN(day)) {
           return null;
         }
@@ -145,6 +149,7 @@ function extractDateFromQuestion(question: string): string | null {
       };
 
       const monthNum = months[monthName.toLowerCase()];
+      console.log(`      extractDate: monthName=${monthName}, day=${day}, monthNum=${monthNum}`);
       if (monthNum === undefined || isNaN(day)) {
         return null;
       }
