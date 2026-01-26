@@ -265,8 +265,8 @@ function parseMarketData(market: any, eventData?: any): ElonTweetMarket | null {
       active: !market.closed,
       closed: !!market.closed,
       resolved: !!market.resolved,
-      volume: market?.volume ?? market?.volumeNum ?? market?.total_volume ?? 0,
-      liquidity: market?.liquidity ?? market?.liquidityNum ?? market?.total_liquidity ?? 0
+      volume: Number(market?.volume) || Number(market?.volumeNum) || Number(market?.total_volume) || 0,
+      liquidity: Number(market?.liquidity) || Number(market?.liquidityNum) || Number(market?.total_liquidity) || 0
     };
   } catch (error) {
     console.error(`  Error parsing market: ${getErrorMessage(error)}`);

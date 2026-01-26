@@ -254,9 +254,11 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         prices = outcomes.map(() => 0);
       }
 
-      // Extract volume and liquidity with fallbacks
-      const volume = market?.volume ?? market?.volumeNum ?? market?.total_volume ?? 0;
-      const liquidity = market?.liquidity ?? market?.liquidityNum ?? market?.total_liquidity ?? 0;
+      // Extract volume and liquidity with fallbacks (API returns strings)
+      const volumeRaw = market?.volume ?? market?.volumeNum ?? market?.total_volume ?? 0;
+      const liquidityRaw = market?.liquidity ?? market?.liquidityNum ?? market?.total_liquidity ?? 0;
+      const volume = Number(volumeRaw) || 0;
+      const liquidity = Number(liquidityRaw) || 0;
 
       return {
         id: String(market?.id || market?.condition_id || market?.market_id || 'unknown'),
@@ -264,8 +266,8 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         outcomes,
         prices,
         endDate: String(market?.end_date_iso || market?.end_date || market?.endDate || market?.close_time || market?.closeTime || ''),
-        volume: typeof volume === 'number' && !isNaN(volume) ? volume : 0,
-        liquidity: typeof liquidity === 'number' && !isNaN(liquidity) ? liquidity : 0
+        volume,
+        liquidity
       };
     });
   } catch (error) {
