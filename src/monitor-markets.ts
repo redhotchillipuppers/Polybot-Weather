@@ -95,54 +95,14 @@ function extractDateFromQuestion(question: string): string | null {
   if (!question) return null;
 
   try {
-    // Pattern: "on Month Day" (e.g., "on January 27")
-    // Using \b word boundary to avoid matching "on" in "London"
-    // Using more flexible whitespace matching [\s\u00A0]+ to handle non-breaking spaces
-    const dateMatch = question.match(/\bon[\s\u00A0]+(January|February|March|April|May|June|July|August|September|October|November|December)[\s\u00A0]+(\d{1,2})/i);
-
-    console.log(`      extractDate: dateMatch=${JSON.stringify(dateMatch)}`);
-
-    // Debug: log what we're trying to match
-    if (!dateMatch) {
-      // Try to find "January", "February", etc. anywhere in the string as fallback
-      const monthMatch = question.match(/(January|February|March|April|May|June|July|August|September|October|November|December)[\s\u00A0]+(\d{1,2})/i);
-      console.log(`      extractDate: fallback monthMatch=${JSON.stringify(monthMatch)}`);
-      if (monthMatch && monthMatch[1] && monthMatch[2]) {
-        const monthName = monthMatch[1];
-        const day = parseInt(monthMatch[2], 10);
-
-        const months: Record<string, number> = {
-          january: 0, february: 1, march: 2, april: 3,
-          may: 4, june: 5, july: 6, august: 7,
-          september: 8, october: 9, november: 10, december: 11,
-        };
-
-        const monthNum = months[monthName.toLowerCase()];
-        console.log(`      extractDate: monthName=${monthName}, day=${day}, monthNum=${monthNum}`);
-        if (monthNum === undefined || isNaN(day)) {
-          return null;
-        }
-
-        const now = new Date();
-        let year = now.getFullYear();
-        const testDate = new Date(year, monthNum, day);
-
-        if (testDate < now) {
-          year += 1;
-        }
-
-        const monthStr = String(monthNum + 1).padStart(2, '0');
-        const dayStr = String(day).padStart(2, '0');
-        return `${year}-${monthStr}-${dayStr}`;
-      }
-      return null;
-    }
+    // Simplified: just look for "Month Day" pattern directly
+    // This avoids issues with matching "on" from "London"
+    const dateMatch = question.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})/i);
 
     if (dateMatch && dateMatch[1] && dateMatch[2]) {
       const monthName = dateMatch[1];
       const day = parseInt(dateMatch[2], 10);
 
-      // Convert month name to number
       const months: Record<string, number> = {
         january: 0, february: 1, march: 2, april: 3,
         may: 4, june: 5, july: 6, august: 7,
@@ -150,7 +110,6 @@ function extractDateFromQuestion(question: string): string | null {
       };
 
       const monthNum = months[monthName.toLowerCase()];
-      console.log(`      extractDate: monthName=${monthName}, day=${day}, monthNum=${monthNum}`);
       if (monthNum === undefined || isNaN(day)) {
         return null;
       }
@@ -160,12 +119,10 @@ function extractDateFromQuestion(question: string): string | null {
       let year = now.getFullYear();
       const testDate = new Date(year, monthNum, day);
 
-      // If the date is in the past, use next year
       if (testDate < now) {
         year += 1;
       }
 
-      // Format as YYYY-MM-DD
       const monthStr = String(monthNum + 1).padStart(2, '0');
       const dayStr = String(day).padStart(2, '0');
       return `${year}-${monthStr}-${dayStr}`;
@@ -222,18 +179,6 @@ function marketToSnapshot(
     // Parse the market question to get bracket type and value
     const parsedQuestion = parseMarketQuestion(question);
     const marketDateStr = extractDateFromQuestion(question);
-
-    // Debug logging
-    console.log(`    DEBUG: question="${question.substring(0, 50)}..."`);
-    // Show character codes around "on" to detect invisible characters
-    const onIndex = question.toLowerCase().indexOf(' on ');
-    if (onIndex !== -1) {
-      const snippet = question.substring(onIndex, onIndex + 20);
-      const charCodes = [...snippet].map(c => c.charCodeAt(0)).join(',');
-      console.log(`    DEBUG: snippet around 'on': "${snippet}" | charCodes: [${charCodes}]`);
-    }
-    console.log(`    DEBUG: parsedQuestion=${JSON.stringify(parsedQuestion)}, marketDateStr=${marketDateStr}`);
-    console.log(`    DEBUG: weatherForecasts count=${weatherForecasts.length}`);
 
     if (parsedQuestion && marketDateStr) {
       // Find matching weather forecast for this market's date
