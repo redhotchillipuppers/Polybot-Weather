@@ -13,4 +13,6 @@ export interface PolymarketMarket {
   outcomes: string[];
   prices: number[];
   endDate: string;
+  volume: number;
+  liquidity: number;
 }

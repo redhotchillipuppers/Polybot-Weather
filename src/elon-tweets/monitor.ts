@@ -266,8 +266,9 @@ async function checkPolymarketOdds(): Promise<void> {
     const marketSnapshots = [];
 
     for (const [dateRange, markets] of eventGroups) {
-      // Calculate total volume for event
+      // Calculate total volume and liquidity for event
       const totalVolume = markets.reduce((sum, m) => sum + m.market.volume, 0);
+      const totalLiquidity = markets.reduce((sum, m) => sum + m.market.liquidity, 0);
 
       // Get all brackets with prices, sorted by YES price descending
       const brackets = markets
@@ -283,8 +284,14 @@ async function checkPolymarketOdds(): Promise<void> {
         .sort((a, b) => b.price - a.price);
 
       // Display event summary
+      const volumeStr = totalVolume > 0
+        ? `$${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+        : 'N/A';
+      const liquidityStr = totalLiquidity > 0
+        ? `$${totalLiquidity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+        : 'N/A';
       console.log(`\n    Event: ${dateRange}`);
-      console.log(`      Total volume: $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+      console.log(`      Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
       console.log(`      Brackets (${brackets.length}):`);
 
       // Show top 5 brackets with highest odds, then summarize rest
