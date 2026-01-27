@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "monitor": "tsx src/monitor-markets.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
   "dependencies": {
     "@polymarket/clob-client": "^5.2.1",
     "dotenv": "^17.2.3",
-    "ethers": "^5.7.2"
+    "ethers": "^5.7.2",
+    "jstat": "^1.9.6"
   }
 }
