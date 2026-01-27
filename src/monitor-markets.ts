@@ -175,6 +175,7 @@ function marketToSnapshot(
     let edge: number | null = null;
     let edgePercent: number | null = null;
     let signal: 'BUY' | 'SELL' | 'HOLD' | null = null;
+    let forecastError: number | null = null;
 
     // Parse the market question to get bracket type and value
     const parsedQuestion = parseMarketQuestion(question);
@@ -196,6 +197,27 @@ function marketToSnapshot(
           parsedQuestion.bracketType,
           parsedQuestion.bracketValue
         );
+
+        // Calculate forecast error based on bracket type
+        // Positive = harder to reach, Negative = easier to reach (for or_higher/or_below)
+        const forecastMax = forecast.maxTemperature;
+        const bracketValue = parsedQuestion.bracketValue;
+        switch (parsedQuestion.bracketType) {
+          case 'or_higher':
+            // Positive = forecast below threshold (harder to reach)
+            // Negative = forecast above threshold (easier to reach)
+            forecastError = bracketValue - forecastMax;
+            break;
+          case 'or_below':
+            // Positive = forecast above threshold (harder to reach)
+            // Negative = forecast below threshold (easier to reach)
+            forecastError = forecastMax - bracketValue;
+            break;
+          case 'exact':
+            // Just the distance (direction doesn't matter for exact brackets)
+            forecastError = Math.abs(bracketValue - forecastMax);
+            break;
+        }
 
         // Calculate edge if we have both model probability and market price
         if (modelProbability !== null && yesPrice !== null) {
@@ -225,6 +247,7 @@ function marketToSnapshot(
       edge,
       edgePercent,
       signal,
+      forecastError,
     };
   } catch (error) {
     console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);

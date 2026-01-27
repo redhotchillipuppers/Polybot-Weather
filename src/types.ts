@@ -31,6 +31,7 @@ export interface MarketSnapshot {
   edge: number | null;
   edgePercent: number | null;
   signal: 'BUY' | 'SELL' | 'HOLD' | null;
+  forecastError: number | null;
 }
 
 export interface ParsedMarketQuestion {
