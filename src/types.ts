@@ -33,6 +33,8 @@ export interface MarketSnapshot {
   edgePercent: number | null;
   signal: 'BUY' | 'SELL' | 'HOLD' | null;
   forecastError: number | null;
+  isTradeable: boolean;
+  executed: boolean;
 }
 
 export interface ParsedMarketQuestion {
