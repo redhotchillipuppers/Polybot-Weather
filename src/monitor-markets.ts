@@ -19,9 +19,8 @@ const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
 // Scheduling configuration
-const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
+const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes (includes settlement)
 const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
-const SETTLEMENT_CHECK_MINUTES = [5, 15, 25, 35, 45, 55]; // Run 5 minutes offset from market checks
 
 // MarketSnapshot is imported from types.ts
 
@@ -918,20 +917,34 @@ function aggregateDailyPnl(): DailyPnlSummary[] {
   return Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Run settlement pass for all executed trades in recent logs
-async function runSettlementPass(): Promise<void> {
+// Run settlement pass for all executed trades
+// If currentSnapshots is provided, uses those (from current market check) to avoid duplicate API calls
+// Otherwise falls back to reading from log files (used for initial pass on startup)
+async function runSettlementPass(currentSnapshots?: MarketSnapshot[]): Promise<void> {
   const timestamp = formatTimestamp();
   console.log(`\n[${timestamp}] Settlement pass`);
 
-  // Read recent log entries to find executed trades
-  const entries = readLogFile();
   const executedTrades = new Map<string, MarketSnapshot>();
 
-  // Collect unique executed trades (use most recent snapshot for each market)
+  // If current snapshots provided, use them first (reuses data from market check)
+  if (currentSnapshots && currentSnapshots.length > 0) {
+    for (const snapshot of currentSnapshots) {
+      if (snapshot.executed && snapshot.entrySide && !settledMarketIds.has(snapshot.marketId)) {
+        executedTrades.set(snapshot.marketId, snapshot);
+      }
+    }
+  }
+
+  // Also check log entries for any executed trades not in current snapshots
+  // (e.g., trades from markets that are no longer active but need settlement)
+  const entries = readLogFile();
   for (const entry of entries) {
     for (const snapshot of entry.markets) {
       if (snapshot.executed && snapshot.entrySide && !settledMarketIds.has(snapshot.marketId)) {
-        executedTrades.set(snapshot.marketId, snapshot);
+        // Only add if not already in the map (current snapshots take priority)
+        if (!executedTrades.has(snapshot.marketId)) {
+          executedTrades.set(snapshot.marketId, snapshot);
+        }
       }
     }
   }
@@ -1111,6 +1124,9 @@ async function checkMarketOdds(isInitialRun: boolean = false): Promise<void> {
       // Process position management (create positions, check DECIDED_95, close positions)
       processPositionManagement(marketSnapshots);
 
+      // Run settlement check using the same market data (avoids duplicate API calls)
+      await runSettlementPass(marketSnapshots);
+
       // Log entry with current weather forecasts
       const entry: MonitoringEntry = {
         timestamp: new Date().toISOString(),
@@ -1239,8 +1255,7 @@ async function startMonitoring(): Promise<void> {
   console.log('POLYMARKET WEATHER MONITORING');
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
-  console.log(`Checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
-  console.log(`Settlement checks at :${SETTLEMENT_CHECK_MINUTES.join(', :')} past the hour`);
+  console.log(`Market & settlement checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
   console.log(`Settlement log: ${getSettlementLogFilePath()}`);
   console.log(`Positions file: ${POSITIONS_FILE_PATH}`);
@@ -1272,29 +1287,20 @@ async function startMonitoring(): Promise<void> {
     console.error(`Initial weather check failed: ${formatError(error)}`);
   }
 
-  // Also do an explicit odds check on startup
+  // Also do an explicit odds check on startup (includes settlement pass)
   try {
     await checkMarketOdds(true); // true = initial run, show full market list
   } catch (error) {
     console.error(`Initial market check failed: ${formatError(error)}`);
   }
 
-  // Run initial settlement pass
-  try {
-    await runSettlementPass();
-  } catch (error) {
-    console.error(`Initial settlement pass failed: ${formatError(error)}`);
-  }
-
-  // Set up clock-aligned scheduling
+  // Set up clock-aligned scheduling (settlement is integrated into market checks)
   console.log('\n--- Monitoring Loop ---');
-  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => checkMarketOdds(false), 'market check');
+  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => checkMarketOdds(false), 'market & settlement check');
   const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, () => checkWeatherForecast(false), 'weather check');
-  const settlementScheduler = new ClockAlignedScheduler(SETTLEMENT_CHECK_MINUTES, runSettlementPass, 'settlement check');
 
   marketScheduler.start();
   weatherScheduler.start();
-  settlementScheduler.start();
 
   console.log('Monitoring started. Press Ctrl+C to stop.');
 
@@ -1303,7 +1309,6 @@ async function startMonitoring(): Promise<void> {
     console.log('\n\nShutting down monitoring...');
     marketScheduler.stop();
     weatherScheduler.stop();
-    settlementScheduler.stop();
     console.log(`Final log file: ${getLogFilePath()}`);
     console.log(`Settlement log: ${getSettlementLogFilePath()}`);
     console.log('Goodbye!');
@@ -1314,7 +1319,6 @@ async function startMonitoring(): Promise<void> {
     console.log('\n\nReceived SIGTERM, shutting down...');
     marketScheduler.stop();
     weatherScheduler.stop();
-    settlementScheduler.stop();
     process.exit(0);
   });
 }
