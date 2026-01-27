@@ -3,8 +3,8 @@ import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
-import { queryLondonTemperatureMarkets } from './polymarket.js';
-import type { WeatherForecast, PolymarketMarket, MarketSnapshot, ParsedMarketQuestion } from './types.js';
+import { queryLondonTemperatureMarkets, fetchResolvedOutcome, calculateTradePnl } from './polymarket.js';
+import type { WeatherForecast, PolymarketMarket, MarketSnapshot, ParsedMarketQuestion, DailyPnlSummary } from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
 import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge } from './probability-model.js';
 import * as fs from 'fs';
@@ -21,6 +21,7 @@ const CHAIN_ID = 137;
 // Scheduling configuration
 const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
+const SETTLEMENT_CHECK_MINUTES = [5, 15, 25, 35, 45, 55]; // Run 5 minutes offset from market checks
 
 // MarketSnapshot is imported from types.ts
 
@@ -253,6 +254,18 @@ function marketToSnapshot(
     const isTradeable = yesPrice !== null && yesPrice > 0 && liquidity > 0;
     const executed = signal !== null && signal !== 'HOLD' && isTradeable;
 
+    // Entry fields - only set when executed === true
+    // BUY → "YES", SELL → "NO"
+    let entrySide: 'YES' | 'NO' | null = null;
+    let entryYesPrice: number | null = null;
+    let entryNoPrice: number | null = null;
+
+    if (executed && yesPrice !== null) {
+      entrySide = signal === 'BUY' ? 'YES' : 'NO';
+      entryYesPrice = yesPrice;
+      entryNoPrice = 1 - yesPrice;
+    }
+
     return {
       marketId: safeString(market.id, 'unknown'),
       question,
@@ -271,6 +284,11 @@ function marketToSnapshot(
       forecastError,
       isTradeable,
       executed,
+      entrySide,
+      entryYesPrice,
+      entryNoPrice,
+      resolvedOutcome: null,  // Set during settlement pass
+      tradePnl: null,         // Calculated after settlement
     };
   } catch (error) {
     console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);
@@ -378,6 +396,218 @@ function appendToLog(entry: MonitoringEntry): void {
     fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8');
   } catch (error) {
     console.error(`Error writing to log file: ${formatError(error)}`);
+  }
+}
+
+// Get settlement log file path
+function getSettlementLogFilePath(): string {
+  return path.join(process.cwd(), 'settlement_log.json');
+}
+
+// Settlement entry for tracking settled trades
+interface SettlementEntry {
+  timestamp: string;
+  marketId: string;
+  question: string;
+  endDate: string;
+  entrySide: 'YES' | 'NO';
+  entryYesPrice: number;
+  entryNoPrice: number;
+  resolvedOutcome: 'YES' | 'NO';
+  tradePnl: number;
+}
+
+// Read settlement log file
+function readSettlementLog(): SettlementEntry[] {
+  const logPath = getSettlementLogFilePath();
+  try {
+    if (fs.existsSync(logPath)) {
+      const content = fs.readFileSync(logPath, 'utf-8');
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (error) {
+    console.error(`Error reading settlement log: ${formatError(error)}`);
+  }
+  return [];
+}
+
+// Append settlement entry to log
+function appendToSettlementLog(entry: SettlementEntry): void {
+  const logPath = getSettlementLogFilePath();
+
+  try {
+    const entries = readSettlementLog();
+    entries.push(entry);
+    fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8');
+  } catch (error) {
+    console.error(`Error writing to settlement log: ${formatError(error)}`);
+  }
+}
+
+// Track settled market IDs to avoid duplicate processing
+const settledMarketIds = new Set<string>();
+
+// Load already settled markets on startup
+function loadSettledMarketIds(): void {
+  const settlements = readSettlementLog();
+  for (const entry of settlements) {
+    settledMarketIds.add(entry.marketId);
+  }
+}
+
+// Process settlement for executed trades after market close
+async function processSettlement(snapshot: MarketSnapshot): Promise<MarketSnapshot> {
+  // Only process executed trades that haven't been settled yet
+  if (!snapshot.executed || !snapshot.entrySide) {
+    return snapshot;
+  }
+
+  // Skip if already settled
+  if (settledMarketIds.has(snapshot.marketId)) {
+    return snapshot;
+  }
+
+  // Check if market has closed (endDate has passed)
+  if (snapshot.endDate) {
+    const endTime = new Date(snapshot.endDate).getTime();
+    if (isNaN(endTime) || endTime > Date.now()) {
+      // Market hasn't closed yet
+      return snapshot;
+    }
+  }
+
+  // Fetch resolved outcome
+  const resolvedOutcome = await fetchResolvedOutcome(snapshot.marketId);
+  if (!resolvedOutcome) {
+    // Market not yet resolved
+    return snapshot;
+  }
+
+  // Calculate P&L
+  const tradePnl = calculateTradePnl(
+    snapshot.entrySide,
+    resolvedOutcome,
+    snapshot.entryYesPrice,
+    snapshot.entryNoPrice
+  );
+
+  // Update snapshot with settlement data
+  const settledSnapshot: MarketSnapshot = {
+    ...snapshot,
+    resolvedOutcome,
+    tradePnl,
+  };
+
+  // Log settlement
+  if (tradePnl !== null && snapshot.entryYesPrice !== null && snapshot.entryNoPrice !== null) {
+    const settlementEntry: SettlementEntry = {
+      timestamp: new Date().toISOString(),
+      marketId: snapshot.marketId,
+      question: snapshot.question,
+      endDate: snapshot.endDate,
+      entrySide: snapshot.entrySide,
+      entryYesPrice: snapshot.entryYesPrice,
+      entryNoPrice: snapshot.entryNoPrice,
+      resolvedOutcome,
+      tradePnl,
+    };
+    appendToSettlementLog(settlementEntry);
+    settledMarketIds.add(snapshot.marketId);
+
+    const pnlSign = tradePnl >= 0 ? '+' : '';
+    console.log(`  SETTLED: ${snapshot.marketId.substring(0, 8)}... → ${resolvedOutcome} | P&L: ${pnlSign}${tradePnl.toFixed(4)}`);
+  }
+
+  return settledSnapshot;
+}
+
+// Aggregate daily P&L from settlement log
+function aggregateDailyPnl(): DailyPnlSummary[] {
+  const settlements = readSettlementLog();
+  const dailyMap = new Map<string, DailyPnlSummary>();
+
+  for (const entry of settlements) {
+    // Use endDate as settlement date
+    const dateStr = entry.endDate ? entry.endDate.split('T')[0] : 'unknown';
+    if (!dateStr || dateStr === 'unknown') continue;
+
+    let daily = dailyMap.get(dateStr);
+    if (!daily) {
+      daily = {
+        date: dateStr,
+        trades: 0,
+        dailyPnl: 0,
+        settledMarkets: [],
+      };
+      dailyMap.set(dateStr, daily);
+    }
+
+    daily.trades += 1;
+    daily.dailyPnl += entry.tradePnl;
+    daily.settledMarkets.push({
+      marketId: entry.marketId,
+      entrySide: entry.entrySide,
+      resolvedOutcome: entry.resolvedOutcome,
+      tradePnl: entry.tradePnl,
+    });
+  }
+
+  // Sort by date
+  return Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Run settlement pass for all executed trades in recent logs
+async function runSettlementPass(): Promise<void> {
+  const timestamp = formatTimestamp();
+  console.log(`\n[${timestamp}] Settlement pass`);
+
+  // Read recent log entries to find executed trades
+  const entries = readLogFile();
+  const executedTrades = new Map<string, MarketSnapshot>();
+
+  // Collect unique executed trades (use most recent snapshot for each market)
+  for (const entry of entries) {
+    for (const snapshot of entry.markets) {
+      if (snapshot.executed && snapshot.entrySide && !settledMarketIds.has(snapshot.marketId)) {
+        executedTrades.set(snapshot.marketId, snapshot);
+      }
+    }
+  }
+
+  if (executedTrades.size === 0) {
+    console.log('  No unsettled executed trades found.');
+    return;
+  }
+
+  console.log(`  Checking ${executedTrades.size} unsettled trade(s)...`);
+
+  let settledCount = 0;
+  for (const [_marketId, snapshot] of executedTrades) {
+    const settledSnapshot = await processSettlement(snapshot);
+    if (settledSnapshot.resolvedOutcome) {
+      settledCount++;
+    }
+  }
+
+  if (settledCount === 0) {
+    console.log('  No markets resolved yet.');
+  } else {
+    // Show daily P&L summary
+    const dailySummaries = aggregateDailyPnl();
+    if (dailySummaries.length > 0) {
+      console.log('\n  Daily P&L Summary:');
+      for (const summary of dailySummaries) {
+        const pnlSign = summary.dailyPnl >= 0 ? '+' : '';
+        console.log(`    ${summary.date}: ${summary.trades} trade(s), P&L: ${pnlSign}${summary.dailyPnl.toFixed(4)}`);
+      }
+
+      const totalPnl = dailySummaries.reduce((sum, s) => sum + s.dailyPnl, 0);
+      const totalTrades = dailySummaries.reduce((sum, s) => sum + s.trades, 0);
+      const totalSign = totalPnl >= 0 ? '+' : '';
+      console.log(`    ─────────────────────────────`);
+      console.log(`    Total: ${totalTrades} trade(s), P&L: ${totalSign}${totalPnl.toFixed(4)}`);
+    }
   }
 }
 
@@ -646,8 +876,14 @@ async function startMonitoring(): Promise<void> {
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
   console.log(`Checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
+  console.log(`Settlement checks at :${SETTLEMENT_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
+  console.log(`Settlement log: ${getSettlementLogFilePath()}`);
   console.log('='.repeat(60));
+
+  // Load already settled markets to avoid duplicate processing
+  loadSettledMarketIds();
+  console.log(`Loaded ${settledMarketIds.size} previously settled market(s).`);
 
   // Initialize trading client (for future trading functionality)
   console.log('\n--- Initialization ---');
@@ -674,13 +910,22 @@ async function startMonitoring(): Promise<void> {
     console.error(`Initial market check failed: ${formatError(error)}`);
   }
 
+  // Run initial settlement pass
+  try {
+    await runSettlementPass();
+  } catch (error) {
+    console.error(`Initial settlement pass failed: ${formatError(error)}`);
+  }
+
   // Set up clock-aligned scheduling
   console.log('\n--- Monitoring Loop ---');
   const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => checkMarketOdds(false), 'market check');
   const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, () => checkWeatherForecast(false), 'weather check');
+  const settlementScheduler = new ClockAlignedScheduler(SETTLEMENT_CHECK_MINUTES, runSettlementPass, 'settlement check');
 
   marketScheduler.start();
   weatherScheduler.start();
+  settlementScheduler.start();
 
   console.log('Monitoring started. Press Ctrl+C to stop.');
 
@@ -689,7 +934,9 @@ async function startMonitoring(): Promise<void> {
     console.log('\n\nShutting down monitoring...');
     marketScheduler.stop();
     weatherScheduler.stop();
+    settlementScheduler.stop();
     console.log(`Final log file: ${getLogFilePath()}`);
+    console.log(`Settlement log: ${getSettlementLogFilePath()}`);
     console.log('Goodbye!');
     process.exit(0);
   });
@@ -698,6 +945,7 @@ async function startMonitoring(): Promise<void> {
     console.log('\n\nReceived SIGTERM, shutting down...');
     marketScheduler.stop();
     weatherScheduler.stop();
+    settlementScheduler.stop();
     process.exit(0);
   });
 }

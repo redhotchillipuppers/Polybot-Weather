@@ -1,6 +1,6 @@
 // Polymarket API integration
 
-import type { PolymarketMarket } from './types.js';
+import type { PolymarketMarket, MarketSnapshot } from './types.js';
 import { fetchWithRetry, formatError, safeArray, safeNumber, safeString, safeJsonParse } from './api-utils.js';
 
 const GAMMA_API_URL = 'https://gamma-api.polymarket.com';
@@ -239,5 +239,102 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
     console.error(`Error querying Polymarket markets: ${formatError(error)}`);
     // Return empty array instead of throwing - graceful degradation
     return [];
+  }
+}
+
+// Fetch resolved outcome for a market by ID
+// Returns 'YES' or 'NO' if resolved, null if not yet resolved or error
+export async function fetchResolvedOutcome(marketId: string): Promise<'YES' | 'NO' | null> {
+  if (!marketId || marketId === 'unknown') {
+    return null;
+  }
+
+  try {
+    const response = await fetchWithRetry(
+      `${GAMMA_API_URL}/markets/${marketId}`,
+      undefined,
+      POLYMARKET_RETRY_OPTIONS
+    );
+
+    if (!response.ok) {
+      console.warn(`Failed to fetch market ${marketId}: ${response.status}`);
+      return null;
+    }
+
+    const market = await response.json();
+
+    // Check if market is resolved
+    // Polymarket uses various fields to indicate resolution
+    const resolved = market?.resolved || market?.is_resolved || market?.active === false;
+    if (!resolved) {
+      return null;
+    }
+
+    // Get the winning outcome
+    // Different API formats use different field names
+    const winningOutcome = market?.winningOutcome ||
+                          market?.winning_outcome ||
+                          market?.resolution ||
+                          market?.resolutionOutcome;
+
+    if (winningOutcome) {
+      const outcome = safeString(winningOutcome, '').toUpperCase();
+      if (outcome === 'YES' || outcome === '1' || outcome === 'TRUE') {
+        return 'YES';
+      }
+      if (outcome === 'NO' || outcome === '0' || outcome === 'FALSE') {
+        return 'NO';
+      }
+    }
+
+    // Alternative: check outcome prices (1.0 = winner, 0.0 = loser)
+    const outcomePrices = market?.outcomePrices || market?.outcome_prices;
+    if (outcomePrices) {
+      const prices = typeof outcomePrices === 'string'
+        ? safeJsonParse<number[]>(outcomePrices, [])
+        : safeArray(outcomePrices);
+
+      if (prices.length >= 2) {
+        const yesPrice = safeNumber(prices[0], 0);
+        const noPrice = safeNumber(prices[1], 0);
+        if (yesPrice >= 0.99) return 'YES';
+        if (noPrice >= 0.99) return 'NO';
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.warn(`Error fetching resolved outcome for ${marketId}: ${formatError(error)}`);
+    return null;
+  }
+}
+
+// Calculate trade P&L based on entry side and resolved outcome
+// Assumes stake = 1 unit per trade
+export function calculateTradePnl(
+  entrySide: 'YES' | 'NO' | null,
+  resolvedOutcome: 'YES' | 'NO' | null,
+  entryYesPrice: number | null,
+  entryNoPrice: number | null
+): number | null {
+  if (!entrySide || !resolvedOutcome) {
+    return null;
+  }
+
+  if (entrySide === 'YES') {
+    if (entryYesPrice === null) return null;
+    // If resolved YES: profit = (1 - entryYesPrice)
+    // If resolved NO: loss = -entryYesPrice
+    return resolvedOutcome === 'YES'
+      ? (1 - entryYesPrice)
+      : (-entryYesPrice);
+  } else {
+    // entrySide === 'NO'
+    if (entryNoPrice === null) return null;
+    // If resolved NO: profit = (1 - entryNoPrice)
+    // If resolved YES: loss = -entryNoPrice
+    return resolvedOutcome === 'NO'
+      ? (1 - entryNoPrice)
+      : (-entryNoPrice);
   }
 }
