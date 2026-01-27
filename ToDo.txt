@@ -1,0 +1,202 @@
+================================================================================
+POLYBOT-WEATHER REFACTORING TODO LIST
+================================================================================
+
+Generated: 2026-01-27
+Based on: Code review of entire codebase
+
+================================================================================
+HIGH PRIORITY
+================================================================================
+
+[ ] 1. Split monitor-markets.ts into smaller modules
+
+    The main file is 1,330 lines with 7+ distinct responsibilities.
+    Extract into separate modules:
+
+    - src/parsers/market-parser.ts
+      (parseMarketQuestion, extractDateFromQuestion, extractTemperatureFromQuestion)
+
+    - src/positions/position-manager.ts
+      (createPositionIfNeeded, closePositionsForDate, processPositionManagement)
+
+    - src/positions/decided-95.ts
+      (checkDecided95, isExactTemperatureMarket, DECIDED_95 constants)
+
+    - src/settlement/settlement.ts
+      (processSettlement, runSettlementPass, aggregateDailyPnl)
+
+    - src/scheduler.ts
+      (ClockAlignedScheduler class, getDelayUntilNextMinute)
+
+    - src/persistence/file-store.ts
+      (readLogFile, appendToLog, readSettlementLog, loadPositionsFile, etc.)
+
+--------------------------------------------------------------------------------
+
+[ ] 2. Add environment variable validation at startup
+
+    Current code uses non-null assertions that crash with unclear errors:
+      const PRIVATE_KEY = process.env.PRIVATE_KEY!;
+
+    Add a validateEnv() function that checks all required env vars exist
+    and provides clear error messages before any other initialization.
+
+--------------------------------------------------------------------------------
+
+[ ] 3. Consolidate hardcoded constants into config file
+
+    Create src/config/constants.ts with all magic numbers:
+    - DECIDED_95_THRESHOLD (0.95)
+    - DECIDED_95_STREAK_REQUIRED (2)
+    - MARKET_CHECK_MINUTES ([0, 10, 20, 30, 40, 50])
+    - WEATHER_CHECK_MINUTES ([0, 10, 20, 30, 40, 50])
+    - EDGE_THRESHOLD (0.05)
+    - MARKET_LOOKAHEAD_DAYS (3)
+    - HOST URL
+    - CHAIN_ID (137)
+    - London coordinates
+
+--------------------------------------------------------------------------------
+
+[ ] 4. Remove duplicate market API calls
+
+    checkWeatherForecast() and checkMarketOdds() both run every 10 minutes
+    and both call queryLondonTemperatureMarkets() separately.
+
+    Refactor to fetch markets once and share the result between both
+    functions, or combine into a single scheduled task.
+
+================================================================================
+MEDIUM PRIORITY
+================================================================================
+
+[ ] 5. Replace global mutable state with dependency injection
+
+    Current global variables make testing impossible:
+    - latestWeatherForecasts (line 36)
+    - settledMarketIds (line 448)
+    - positionsData (line 463)
+    - previousMarketCount (line 1062)
+
+    Create a MonitoringState class or use constructor injection to pass
+    state explicitly to functions that need it.
+
+--------------------------------------------------------------------------------
+
+[ ] 6. Add TypeScript types for Polymarket API responses
+
+    polymarket.ts uses 'any' extensively for API response handling.
+    Define proper interfaces:
+    - RawPolymarketMarket
+    - RawPolymarketEvent
+    - GammaApiResponse
+
+    This will catch API changes at compile time rather than runtime.
+
+--------------------------------------------------------------------------------
+
+[ ] 7. Write tests for critical business logic
+
+    Currently only probability-model.test.ts exists (236 lines).
+    Add tests for:
+    - Position management (createPositionIfNeeded, closePositionsForDate)
+    - DECIDED_95 detection logic
+    - Settlement P&L calculations
+    - Market question parsing (parseMarketQuestion, extractDateFromQuestion)
+    - Date extraction from end dates
+
+--------------------------------------------------------------------------------
+
+[ ] 8. Clean up deprecated code
+
+    Remove the deprecated weatherForecast field from MonitoringEntry:
+      weatherForecast: WeatherForecast | null;  // Deprecated
+
+    It's been replaced by weatherForecasts array. Update any code that
+    still references it and remove the field.
+
+================================================================================
+LOW PRIORITY
+================================================================================
+
+[ ] 9. Remove unused strategy.ts file
+
+    src/strategy.ts is a 1-line stub file that serves no purpose.
+    Either implement the intended functionality or delete the file.
+
+--------------------------------------------------------------------------------
+
+[ ] 10. Move SettlementEntry interface to types.ts
+
+    The SettlementEntry interface is defined inline in monitor-markets.ts
+    (lines 407-417). Move it to types.ts with other shared interfaces
+    for consistency.
+
+--------------------------------------------------------------------------------
+
+[ ] 11. Fix awkward type casting in weather.ts
+
+    Current code uses:
+      safeNumber(f?.main?.temp_max, null as unknown as number)
+
+    This is a code smell. Either:
+    - Use undefined as the sentinel value
+    - Create a safeNumberOrNull variant
+    - Handle the nullable case explicitly
+
+--------------------------------------------------------------------------------
+
+[ ] 12. Consider splitting types.ts by domain
+
+    As the codebase grows, types.ts (122 lines) could be split:
+    - src/types/weather.ts
+    - src/types/market.ts
+    - src/types/position.ts
+    - src/types/settlement.ts
+
+================================================================================
+SUGGESTED FILE STRUCTURE AFTER REFACTORING
+================================================================================
+
+src/
+├── config/
+│   └── constants.ts         # All thresholds, intervals, URLs
+├── parsers/
+│   └── market-parser.ts     # Question parsing, date extraction
+├── positions/
+│   ├── position-manager.ts  # Create, close, track positions
+│   └── decided-95.ts        # Early close detection logic
+├── settlement/
+│   └── settlement.ts        # P&L calculation, settlement logging
+├── persistence/
+│   └── file-store.ts        # All JSON file read/write operations
+├── scheduler.ts             # ClockAlignedScheduler class
+├── monitor.ts               # Main orchestration (simplified)
+├── polymarket.ts            # Polymarket API integration
+├── weather.ts               # OpenWeather API integration
+├── probability-model.ts     # Statistical probability model
+├── api-utils.ts             # Retry logic, safe type helpers
+├── types/
+│   ├── index.ts             # Re-exports all types
+│   ├── weather.ts           # Weather-related interfaces
+│   ├── market.ts            # Market/snapshot interfaces
+│   ├── position.ts          # Position tracking interfaces
+│   └── settlement.ts        # Settlement/P&L interfaces
+└── __tests__/
+    ├── probability-model.test.ts
+    ├── market-parser.test.ts
+    ├── position-manager.test.ts
+    └── settlement.test.ts
+
+================================================================================
+NOTES
+================================================================================
+
+- The codebase is functional and has good error handling patterns
+- Main issue is concentration of logic in monitor-markets.ts
+- Refactoring should be done incrementally to avoid breaking changes
+- Consider adding integration tests before major refactoring
+- The probability model and API utilities are well-designed and can remain as-is
+
+================================================================================
