@@ -9,13 +9,13 @@ Based on: Code review of entire codebase
 HIGH PRIORITY
 ================================================================================
 
-[ ] 1. Add environment variable validation at startup
+[x] 1. Add environment variable validation at startup
 
-    Current code uses non-null assertions that crash with unclear errors:
-      const PRIVATE_KEY = process.env.PRIVATE_KEY!;
-
-    Add a validateEnv() function that checks all required env vars exist
-    and provides clear error messages before any other initialization.
+    COMPLETED: Created src/config/env.ts with validateEnv() function that:
+    - Checks all required env vars (PRIVATE_KEY, OPENWEATHER_API_KEY) exist
+    - Provides clear error messages listing missing variables
+    - Exits with helpful example .env file format
+    Updated both src/index.ts and src/monitor-markets.ts to use getEnvConfig().
 
 --------------------------------------------------------------------------------
 
