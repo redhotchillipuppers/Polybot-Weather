@@ -1,5 +1,4 @@
 // Market monitoring script - collects weather forecasts and market odds over time
-import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getWeatherForDates } from './weather.js';
@@ -14,12 +13,11 @@ import { ClockAlignedScheduler } from './scheduler.js';
 import { getLogFilePath, getSettlementLogFilePath, appendToLog, type MonitoringEntry } from './persistence/file-store.js';
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
+import { getEnvConfig } from './config/env.js';
 
-// Load environment variables
-dotenv.config();
+// Validate environment variables at startup (exits with clear error if missing)
+const { PRIVATE_KEY, OPENWEATHER_API_KEY } = getEnvConfig();
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY!;
-const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY!;
 const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
