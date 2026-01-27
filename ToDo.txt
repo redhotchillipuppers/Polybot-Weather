@@ -9,32 +9,7 @@ Based on: Code review of entire codebase
 HIGH PRIORITY
 ================================================================================
 
-[ ] 1. Split monitor-markets.ts into smaller modules
-
-    The main file is 1,330 lines with 7+ distinct responsibilities.
-    Extract into separate modules:
-
-    - src/parsers/market-parser.ts
-      (parseMarketQuestion, extractDateFromQuestion, extractTemperatureFromQuestion)
-
-    - src/positions/position-manager.ts
-      (createPositionIfNeeded, closePositionsForDate, processPositionManagement)
-
-    - src/positions/decided-95.ts
-      (checkDecided95, isExactTemperatureMarket, DECIDED_95 constants)
-
-    - src/settlement/settlement.ts
-      (processSettlement, runSettlementPass, aggregateDailyPnl)
-
-    - src/scheduler.ts
-      (ClockAlignedScheduler class, getDelayUntilNextMinute)
-
-    - src/persistence/file-store.ts
-      (readLogFile, appendToLog, readSettlementLog, loadPositionsFile, etc.)
-
---------------------------------------------------------------------------------
-
-[ ] 2. Add environment variable validation at startup
+[ ] 1. Add environment variable validation at startup
 
     Current code uses non-null assertions that crash with unclear errors:
       const PRIVATE_KEY = process.env.PRIVATE_KEY!;
@@ -44,7 +19,7 @@ HIGH PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 3. Consolidate hardcoded constants into config file
+[ ] 2. Consolidate hardcoded constants into config file
 
     Create src/config/constants.ts with all magic numbers:
     - DECIDED_95_THRESHOLD (0.95)
@@ -59,13 +34,32 @@ HIGH PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 4. Remove duplicate market API calls
+[ ] 3. Remove duplicate market API calls
 
     checkWeatherForecast() and checkMarketOdds() both run every 10 minutes
     and both call queryLondonTemperatureMarkets() separately.
 
     Refactor to fetch markets once and share the result between both
     functions, or combine into a single scheduled task.
+
+--------------------------------------------------------------------------------
+
+[ ] 4. Weather Underground oracle monitor (EGLC)
+
+    Polymarket resolves this market using the Weather Underground daily
+    history page for London City Airport (EGLC):
+    https://www.wunderground.com/history/daily/gb/london/EGLC
+
+    Resolution uses the finalized daily high temperature, rounded to whole °C.
+    Revisions after finalization are ignored.
+
+    Implement an oracle monitor that:
+    - Identifies the internal JSON endpoint used by the WU page
+      (via DevTools -> Network -> Fetch/XHR, "Copy as cURL")
+    - Calls that endpoint directly (no full browser) to read the daily high (°C)
+    - Logs changes and stability of the reported "High" near end-of-day
+    - Feeds this value into late-stage Polymarket decision logic
+      (oracle-alignment signal)
 
 ================================================================================
 MEDIUM PRIORITY
