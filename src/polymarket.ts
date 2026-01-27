@@ -81,11 +81,12 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
     // Generate slugs dynamically for today and next few days
     const eventSlugs = generateUpcomingEventSlugs(3);
 
-    console.log('Trying to fetch London temperature events by slug...');
+    // Track summary stats for consolidated logging
+    let eventsFound = 0;
+    let totalMarketsFromSlugs = 0;
 
     for (const slug of eventSlugs) {
       try {
-        console.log(`  Trying slug: ${slug}`);
         const eventResponse = await fetchWithRetry(
           `${GAMMA_API_URL}/events/slug/${slug}`,
           undefined,
@@ -94,28 +95,29 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
         if (eventResponse.ok) {
           const eventData = await eventResponse.json();
-          const title = safeString(eventData?.title, 'Unknown event');
-          console.log(`  ✓ Found event: "${title}"`);
+          eventsFound++;
 
           const markets = safeArray(eventData?.markets);
           if (markets.length > 0) {
-            console.log(`    Markets in event: ${markets.length}`);
+            totalMarketsFromSlugs += markets.length;
             allMarkets.push(...markets);
           }
-        } else {
-          console.log(`  ✗ Event not found (${eventResponse.status})`);
         }
+        // Silent on 404s - expected for dates without markets
       } catch (error) {
-        // Log individual slug failures but continue with others
-        console.warn(`  ✗ Error fetching slug ${slug}: ${formatError(error)}`);
+        // Only log actual errors, not 404s
+        console.warn(`  Error fetching slug ${slug}: ${formatError(error)}`);
       }
     }
 
-    console.log(`\nTotal markets found via slugs: ${allMarkets.length}`);
+    // Single summary line for slug fetch results
+    if (eventsFound > 0) {
+      console.log(`Found ${eventsFound} event(s) (${totalMarketsFromSlugs} markets total)`);
+    }
 
     // If no luck with slugs, fall back to searching events
     if (allMarkets.length === 0) {
-      console.log('\nFalling back to event search...');
+      console.log('Falling back to event search...');
 
       try {
         const eventsResponse = await fetchWithRetry(
@@ -128,44 +130,25 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
           const eventsData = await eventsResponse.json();
           const events = Array.isArray(eventsData) ? eventsData : safeArray(eventsData?.data);
 
-          console.log(`Fetched ${events.length} events`);
-
-          // Debug: show first few event titles to see what we're getting
-          console.log('\nSample event titles:');
-          events.slice(0, 5).forEach((e: any, i: number) => {
-            const title = safeString(e?.title, 'No title');
-            const closed = e?.closed ?? 'unknown';
-            console.log(`  ${i + 1}. "${title}" (closed: ${closed})`);
-          });
-
           // Filter for London temperature events
           const londonEvents = events.filter((e: any) => {
             const title = safeString(e?.title, '').toLowerCase();
             return title.includes('london') && (title.includes('temperature') || title.includes('temp'));
           });
 
-          console.log(`Found ${londonEvents.length} London temperature events`);
-
           if (londonEvents.length > 0) {
-            console.log('\nLondon temperature events:');
-            londonEvents.forEach((e: any, i: number) => {
-              const title = safeString(e?.title, 'No title');
-              const slug = safeString(e?.slug, 'no-slug');
-              const marketCount = safeArray(e?.markets).length;
-              console.log(`  ${i + 1}. ${title} (slug: ${slug})`);
-              console.log(`     Markets in event: ${marketCount}`);
-            });
-
             // Extract all markets from these events
+            let marketCount = 0;
             londonEvents.forEach((event: any) => {
               const markets = safeArray(event?.markets);
+              marketCount += markets.length;
               allMarkets.push(...markets);
             });
 
-            console.log(`\nTotal markets extracted from events: ${allMarkets.length}`);
+            console.log(`Found ${londonEvents.length} event(s) (${marketCount} markets total)`);
           }
         } else {
-          console.log(`Events fetch failed: ${eventsResponse.status} ${eventsResponse.statusText}`);
+          console.error(`Events fetch failed: ${eventsResponse.status} ${eventsResponse.statusText}`);
         }
       } catch (error) {
         console.error(`Error searching events: ${formatError(error)}`);
@@ -174,7 +157,7 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
     // If we didn't find any markets through events, fall back to direct market search
     if (allMarkets.length === 0) {
-      console.log('\nNo markets found in events, trying direct market search...');
+      console.log('Falling back to direct market search...');
 
       try {
         const response = await fetchWithRetry(
@@ -190,29 +173,18 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
         const data = await response.json();
         const markets = Array.isArray(data) ? data : safeArray(data?.data);
 
-        console.log(`Fetched ${markets.length} markets from fallback`);
-
         // Filter for London temperature
         allMarkets = markets.filter((m: any) => {
           const question = safeString(m?.question, '').toLowerCase();
           return question.includes('london') && (question.includes('temperature') || question.includes('temp'));
         });
 
-        console.log(`Found ${allMarkets.length} London temperature markets`);
+        if (allMarkets.length > 0) {
+          console.log(`Found ${allMarkets.length} London temperature market(s)`);
+        }
       } catch (error) {
         console.error(`Error in direct market search: ${formatError(error)}`);
       }
-    }
-
-    // Show the London temperature markets we found
-    if (allMarkets.length > 0) {
-      console.log('\nMarkets found:');
-      allMarkets.forEach((m: any, i: number) => {
-        const question = safeString(m?.question, 'No question');
-        const endDate = m?.endDateIso || m?.end_date_iso || m?.endDate || 'Unknown';
-        console.log(`  ${i + 1}. ${question}`);
-        console.log(`     Closes: ${endDate}`);
-      });
     }
 
     // Filter by date - markets closing in next 3 days
@@ -231,7 +203,19 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
       }
     });
 
-    console.log(`\nAfter date filtering (next 3 days): ${filteredMarkets.length} markets`);
+    // Show consolidated filtering info - extract unique dates
+    if (filteredMarkets.length > 0 && filteredMarkets.length !== allMarkets.length) {
+      const uniqueDates = new Set<string>();
+      filteredMarkets.forEach((m: any) => {
+        const endDateStr = m?.endDateIso || m?.end_date_iso || m?.endDate;
+        if (endDateStr) {
+          const dateOnly = endDateStr.split('T')[0];
+          if (dateOnly) uniqueDates.add(dateOnly);
+        }
+      });
+      const dateList = Array.from(uniqueDates).sort().join(', ');
+      console.log(`Filtered to ${filteredMarkets.length} markets for dates: ${dateList}`);
+    }
 
     // Map to our PolymarketMarket interface with safe accessors
     return filteredMarkets.map((market: any) => {

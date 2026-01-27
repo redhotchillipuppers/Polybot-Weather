@@ -322,7 +322,7 @@ function readLogFile(): MonitoringEntry[] {
   return [];
 }
 
-// Append entry to log file
+// Append entry to log file (silent unless error - path shown in startup banner)
 function appendToLog(entry: MonitoringEntry): void {
   const logPath = getLogFilePath();
 
@@ -330,7 +330,6 @@ function appendToLog(entry: MonitoringEntry): void {
     const entries = readLogFile();
     entries.push(entry);
     fs.writeFileSync(logPath, JSON.stringify(entries, null, 2), 'utf-8');
-    console.log(`  Logged to: ${logPath}`);
   } catch (error) {
     console.error(`Error writing to log file: ${formatError(error)}`);
   }
@@ -409,70 +408,80 @@ class ClockAlignedScheduler {
   }
 }
 
+// Track previous market count for change detection
+let previousMarketCount = 0;
+
 // Check market odds (runs every 10 minutes)
-async function checkMarketOdds(): Promise<void> {
+async function checkMarketOdds(isInitialRun: boolean = false): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[${timestamp}] Checking market odds...`);
+  console.log(`\n[${timestamp}] Market odds`);
 
   try {
     const markets = await queryLondonTemperatureMarkets();
 
     if (!markets || markets.length === 0) {
       console.log('  No London temperature markets found.');
+      previousMarketCount = 0;
     } else {
-      console.log(`  Found ${markets.length} market(s):`);
+      // Convert markets to snapshots first
+      const marketSnapshots = safeArray(markets)
+        .map(m => marketToSnapshot(m, latestWeatherForecasts))
+        .filter((s): s is MarketSnapshot => s !== null);
 
-      markets.forEach((market, index) => {
-        const snapshot = marketToSnapshot(market, latestWeatherForecasts);
-        if (snapshot) {
-          // Format market price
-          const marketPercentage = snapshot.yesPrice !== null
-            ? (snapshot.yesPrice * 100).toFixed(1) + '%'
-            : 'N/A';
-
-          // Format model probability
-          const modelPercentage = snapshot.modelProbability !== null
-            ? (snapshot.modelProbability * 100).toFixed(1) + '%'
-            : 'N/A';
-
-          // Format edge (only show if significant > 5%)
-          let edgeStr = '';
-          if (snapshot.edge !== null && Math.abs(snapshot.edge) > 0.05) {
-            const edgeSign = snapshot.edge >= 0 ? '+' : '';
-            edgeStr = ` | Edge: ${edgeSign}${(snapshot.edge * 100).toFixed(1)}%`;
-          }
-
-          // Format signal
-          const signalStr = snapshot.signal ? ` | Signal: ${snapshot.signal}` : '';
-
-          // Format volume and liquidity
-          const volumeStr = snapshot.volume > 0 ? `$${snapshot.volume.toLocaleString()}` : 'N/A';
-          const liquidityStr = snapshot.liquidity > 0 ? `$${snapshot.liquidity.toLocaleString()}` : 'N/A';
-
-          console.log(`    ${index + 1}. ${snapshot.question}`);
-          console.log(`       Market: ${marketPercentage} | Model: ${modelPercentage}${edgeStr}${signalStr}`);
-          console.log(`       Volume: ${volumeStr} | Liquidity: ${liquidityStr}`);
-        } else {
-          console.log(`    ${index + 1}. [Invalid market data]`);
+      // Show full market questions only on initial run or if count changed
+      const marketCountChanged = markets.length !== previousMarketCount;
+      if (isInitialRun || marketCountChanged) {
+        if (marketCountChanged && !isInitialRun) {
+          console.log(`  Market count changed: ${previousMarketCount} → ${markets.length}`);
         }
+        console.log(`  ${markets.length} market(s):`);
+        marketSnapshots.forEach((snapshot, index) => {
+          console.log(`    ${index + 1}. ${snapshot.question}`);
+        });
+        console.log('');
+      }
+      previousMarketCount = markets.length;
+
+      // Always show the probability/edge table (compact format)
+      marketSnapshots.forEach((snapshot, index) => {
+        // Format market price
+        const marketPct = snapshot.yesPrice !== null
+          ? (snapshot.yesPrice * 100).toFixed(1) + '%'
+          : 'N/A';
+
+        // Format model probability
+        const modelPct = snapshot.modelProbability !== null
+          ? (snapshot.modelProbability * 100).toFixed(1) + '%'
+          : 'N/A';
+
+        // Format edge (only show if significant > 5%)
+        let edgeStr = '';
+        if (snapshot.edge !== null && Math.abs(snapshot.edge) > 0.05) {
+          const edgeSign = snapshot.edge >= 0 ? '+' : '';
+          edgeStr = ` Edge:${edgeSign}${(snapshot.edge * 100).toFixed(1)}%`;
+        }
+
+        // Format signal
+        const signalStr = snapshot.signal && snapshot.signal !== 'HOLD' ? ` [${snapshot.signal}]` : '';
+
+        // Extract short temp label from question (e.g., "8°C" from "Will the highest recorded temperature...")
+        const tempMatch = snapshot.question.match(/(\d+(?:\.\d+)?)\s*[°º]?\s*C/i);
+        const tempLabel = tempMatch ? `${tempMatch[1]}°C` : `#${index + 1}`;
+
+        console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
       });
+
+      // Log entry with current weather forecasts
+      const entry: MonitoringEntry = {
+        timestamp: new Date().toISOString(),
+        entryType: 'market_check',
+        weatherForecast: latestWeatherForecasts[0] ?? null,
+        weatherForecasts: safeArray(latestWeatherForecasts),
+        markets: marketSnapshots,
+      };
+
+      appendToLog(entry);
     }
-
-    // Convert markets to snapshots, filtering out null results
-    const marketSnapshots = safeArray(markets)
-      .map(m => marketToSnapshot(m, latestWeatherForecasts))
-      .filter((s): s is MarketSnapshot => s !== null);
-
-    // Log entry with current weather forecasts
-    const entry: MonitoringEntry = {
-      timestamp: new Date().toISOString(),
-      entryType: 'market_check',
-      weatherForecast: latestWeatherForecasts[0] ?? null,
-      weatherForecasts: safeArray(latestWeatherForecasts),
-      markets: marketSnapshots,
-    };
-
-    appendToLog(entry);
 
   } catch (error) {
     console.error(`  Error checking market odds: ${formatError(error)}`);
@@ -480,9 +489,9 @@ async function checkMarketOdds(): Promise<void> {
 }
 
 // Fetch weather forecast (runs every 10 minutes)
-async function checkWeatherForecast(): Promise<void> {
+async function checkWeatherForecast(isInitialRun: boolean = false): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[${timestamp}] Fetching weather forecasts...`);
+  console.log(`\n[${timestamp}] Weather update`);
 
   try {
     // First, fetch markets to know what dates we need weather for
@@ -496,8 +505,6 @@ async function checkWeatherForecast(): Promise<void> {
       return;
     }
 
-    console.log(`  Market dates found: ${marketDates.map(d => d.toISOString().split('T')[0]).join(', ')}`);
-
     // Store previous forecasts for comparison
     const previousForecasts = [...latestWeatherForecasts];
 
@@ -507,7 +514,8 @@ async function checkWeatherForecast(): Promise<void> {
 
     // Check if temperatures are identical to last check
     if (areForecastsIdentical(previousForecasts, newForecasts)) {
-      console.log('  No change');
+      const dateList = marketDates.map(d => d.toISOString().split('T')[0]).join(', ');
+      console.log(`  Weather for ${marketDates.length} date(s) unchanged (${dateList})`);
       return;
     }
 
@@ -515,21 +523,21 @@ async function checkWeatherForecast(): Promise<void> {
     latestWeatherForecasts = newForecasts;
 
     // Show changes in compact format if we have previous data
-    if (previousForecasts.length > 0) {
+    if (previousForecasts.length > 0 && !isInitialRun) {
       const changes = getTemperatureChanges(previousForecasts, newForecasts);
       for (const change of changes) {
         console.log(`  ${change}`);
       }
     } else {
-      // First run - show full details
-      console.log(`  Fetched weather for ${latestWeatherForecasts.length} date(s):`);
+      // First run - show consolidated weather info
+      const dateList = latestWeatherForecasts.map(f => f.date).join(', ');
+      console.log(`  Weather for ${latestWeatherForecasts.length} date(s): ${dateList}`);
       for (const forecast of latestWeatherForecasts) {
         if (forecast) {
           const date = safeString(forecast.date, 'Unknown date');
           const maxTemp = safeNumber(forecast.maxTemperature, 0);
           const minTemp = safeNumber(forecast.minTemperature, 0);
-          const description = safeString(forecast.description, 'No description');
-          console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C (${description})`);
+          console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C`);
         }
       }
     }
@@ -591,12 +599,12 @@ async function startMonitoring(): Promise<void> {
   console.log('POLYMARKET WEATHER MONITORING');
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
-  console.log(`Market checks at: :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
-  console.log(`Weather checks at: :${WEATHER_CHECK_MINUTES.join(', :')} past the hour`);
+  console.log(`Checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
   console.log('='.repeat(60));
 
   // Initialize trading client (for future trading functionality)
+  console.log('\n--- Initialization ---');
   let client: ClobClient | null = null;
   try {
     client = await initializeClient();
@@ -606,29 +614,29 @@ async function startMonitoring(): Promise<void> {
   }
 
   // Initial data collection - fetch both weather and markets
-  console.log('\nPerforming initial data collection...');
+  console.log('\n--- Initial Data Collection ---');
   try {
-    await checkWeatherForecast();
+    await checkWeatherForecast(true); // true = initial run, show full details
   } catch (error) {
     console.error(`Initial weather check failed: ${formatError(error)}`);
   }
 
   // Also do an explicit odds check on startup
   try {
-    await checkMarketOdds();
+    await checkMarketOdds(true); // true = initial run, show full market list
   } catch (error) {
     console.error(`Initial market check failed: ${formatError(error)}`);
   }
 
   // Set up clock-aligned scheduling
-  console.log('\nScheduling recurring checks...');
-  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, checkMarketOdds, 'market check');
-  const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, checkWeatherForecast, 'weather check');
+  console.log('\n--- Monitoring Loop ---');
+  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => checkMarketOdds(false), 'market check');
+  const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, () => checkWeatherForecast(false), 'weather check');
 
   marketScheduler.start();
   weatherScheduler.start();
 
-  console.log('\nMonitoring started. Press Ctrl+C to stop.');
+  console.log('Monitoring started. Press Ctrl+C to stop.');
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
