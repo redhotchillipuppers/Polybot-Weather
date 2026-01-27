@@ -25,6 +25,7 @@ export interface MarketSnapshot {
   prices: number[];
   yesPrice: number | null;
   endDate: string;
+  minutesToClose: number | null;
   volume: number;
   liquidity: number;
   modelProbability: number | null;
