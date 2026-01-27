@@ -248,6 +248,11 @@ function marketToSnapshot(
       }
     }
 
+    // Compute executability fields
+    const liquidity = safeNumber(market.liquidity, 0);
+    const isTradeable = yesPrice !== null && yesPrice > 0 && liquidity > 0;
+    const executed = signal !== null && signal !== 'HOLD' && isTradeable;
+
     return {
       marketId: safeString(market.id, 'unknown'),
       question,
@@ -258,12 +263,14 @@ function marketToSnapshot(
       endDate: endDateStr,
       minutesToClose,
       volume: safeNumber(market.volume, 0),
-      liquidity: safeNumber(market.liquidity, 0),
+      liquidity,
       modelProbability,
       edge,
       edgePercent,
       signal,
       forecastError,
+      isTradeable,
+      executed,
     };
   } catch (error) {
     console.warn(`Failed to convert market to snapshot: ${formatError(error)}`);
