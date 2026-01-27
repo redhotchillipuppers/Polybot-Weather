@@ -4,7 +4,7 @@ import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast, getWeatherForDates } from './weather.js';
 import { queryLondonTemperatureMarkets, fetchResolvedOutcome, calculateTradePnl } from './polymarket.js';
-import type { WeatherForecast, PolymarketMarket, MarketSnapshot, ParsedMarketQuestion, DailyPnlSummary } from './types.js';
+import type { WeatherForecast, PolymarketMarket, MarketSnapshot, ParsedMarketQuestion, DailyPnlSummary, Position, PositionsFile, DecidedDateInfo, EarlyCloseReport, ClosedPositionDetail } from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
 import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge } from './probability-model.js';
 import * as fs from 'fs';
@@ -448,6 +448,367 @@ function appendToSettlementLog(entry: SettlementEntry): void {
 // Track settled market IDs to avoid duplicate processing
 const settledMarketIds = new Set<string>();
 
+// ============================================================
+// EARLY POSITION CLOSING SYSTEM
+// ============================================================
+
+// File paths for position and report tracking
+const POSITIONS_FILE_PATH = path.join(process.cwd(), 'positions.json');
+const DAILY_REPORTS_FILE_PATH = path.join(process.cwd(), 'daily_reports.json');
+
+// DECIDED_95 threshold constant
+const DECIDED_95_THRESHOLD = 0.95;
+const DECIDED_95_STREAK_REQUIRED = 2;
+
+// In-memory positions state
+let positionsData: PositionsFile = {
+  positions: {},
+  decidedDates: {},
+  reportedDates: [],
+};
+
+// Get default empty positions file structure
+function getEmptyPositionsFile(): PositionsFile {
+  return {
+    positions: {},
+    decidedDates: {},
+    reportedDates: [],
+  };
+}
+
+// Load positions file
+function loadPositionsFile(): PositionsFile {
+  try {
+    if (fs.existsSync(POSITIONS_FILE_PATH)) {
+      const content = fs.readFileSync(POSITIONS_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(content);
+      // Validate structure
+      if (parsed && typeof parsed === 'object') {
+        return {
+          positions: parsed.positions || {},
+          decidedDates: parsed.decidedDates || {},
+          reportedDates: Array.isArray(parsed.reportedDates) ? parsed.reportedDates : [],
+        };
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading positions file, starting fresh: ${formatError(error)}`);
+  }
+  return getEmptyPositionsFile();
+}
+
+// Save positions file
+function savePositionsFile(): void {
+  try {
+    fs.writeFileSync(POSITIONS_FILE_PATH, JSON.stringify(positionsData, null, 2), 'utf-8');
+  } catch (error) {
+    console.error(`Error writing positions file: ${formatError(error)}`);
+  }
+}
+
+// Load daily reports file
+function loadDailyReports(): EarlyCloseReport[] {
+  try {
+    if (fs.existsSync(DAILY_REPORTS_FILE_PATH)) {
+      const content = fs.readFileSync(DAILY_REPORTS_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (error) {
+    console.error(`Error reading daily reports file, starting fresh: ${formatError(error)}`);
+  }
+  return [];
+}
+
+// Save daily reports file (append a new report)
+function appendDailyReport(report: EarlyCloseReport): void {
+  try {
+    const reports = loadDailyReports();
+    reports.push(report);
+    fs.writeFileSync(DAILY_REPORTS_FILE_PATH, JSON.stringify(reports, null, 2), 'utf-8');
+  } catch (error) {
+    console.error(`Error writing daily reports file: ${formatError(error)}`);
+  }
+}
+
+// Extract dateKey (YYYY-MM-DD) from endDate string
+function extractDateKeyFromEndDate(endDate: string): string | null {
+  if (!endDate) return null;
+  try {
+    const date = new Date(endDate);
+    if (isNaN(date.getTime())) return null;
+    return date.toISOString().split('T')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Check if a market question is for "exact temperature" (contains "be X°C on")
+function isExactTemperatureMarket(question: string): boolean {
+  if (!question) return false;
+  // Match "be X°C on" pattern - this identifies exact temperature markets
+  // Must NOT contain "or higher" or "or below"
+  const hasExactPattern = /be\s+\d+(?:\.\d+)?[°º\s]*C\s+on/i.test(question);
+  const hasOrHigher = /or\s+higher/i.test(question);
+  const hasOrBelow = /or\s+below/i.test(question);
+  return hasExactPattern && !hasOrHigher && !hasOrBelow;
+}
+
+// Create a position for an executed trade (if not already exists)
+function createPositionIfNeeded(snapshot: MarketSnapshot): void {
+  // Only create for executed trades
+  if (!snapshot.executed || !snapshot.entrySide || snapshot.entryYesPrice === null || snapshot.entryNoPrice === null) {
+    return;
+  }
+
+  const dateKey = extractDateKeyFromEndDate(snapshot.endDate);
+  if (!dateKey) {
+    console.warn(`[Position] Could not extract dateKey from endDate: ${snapshot.endDate}`);
+    return;
+  }
+
+  // Check if position already exists and is open
+  const existingPosition = positionsData.positions[snapshot.marketId];
+  if (existingPosition && existingPosition.isOpen) {
+    // Position already exists and is open, skip
+    return;
+  }
+
+  // Create new position
+  const position: Position = {
+    marketId: snapshot.marketId,
+    dateKey,
+    question: snapshot.question,
+    entrySide: snapshot.entrySide,
+    size: 1, // Constant for now
+    entryYesPrice: snapshot.entryYesPrice,
+    entryNoPrice: snapshot.entryNoPrice,
+    openedAt: new Date().toISOString(),
+    isOpen: true,
+    closedAt: null,
+    exitYesPrice: null,
+    exitNoPrice: null,
+    closeReason: null,
+    realizedPnl: null,
+  };
+
+  positionsData.positions[snapshot.marketId] = position;
+  savePositionsFile();
+
+  // Extract short label for logging
+  const tempMatch = snapshot.question.match(/(\d+(?:\.\d+)?[°º\s]*C(?:\s+or\s+(?:higher|below))?)/i);
+  const tempLabel = tempMatch ? tempMatch[1] : snapshot.marketId.substring(0, 8);
+  console.log(`[Position] Opened ${snapshot.entrySide} position on market ${snapshot.marketId.substring(0, 8)}... (${tempLabel})`);
+}
+
+// Check for DECIDED_95 condition per date
+// Returns the dateKey and trigger market info if a date just became DECIDED_95
+function checkDecided95(marketSnapshots: MarketSnapshot[]): Array<{ dateKey: string; triggerMarket: MarketSnapshot }> {
+  const triggeredDates: Array<{ dateKey: string; triggerMarket: MarketSnapshot }> = [];
+
+  // Group markets by dateKey (only tradeable exact temperature markets)
+  const marketsByDate = new Map<string, MarketSnapshot[]>();
+
+  for (const snapshot of marketSnapshots) {
+    // Only consider tradeable markets
+    if (!snapshot.isTradeable) continue;
+
+    // Only consider exact temperature markets
+    if (!isExactTemperatureMarket(snapshot.question)) continue;
+
+    const dateKey = extractDateKeyFromEndDate(snapshot.endDate);
+    if (!dateKey) continue;
+
+    const markets = marketsByDate.get(dateKey) || [];
+    markets.push(snapshot);
+    marketsByDate.set(dateKey, markets);
+  }
+
+  const now = new Date().toISOString();
+
+  // Check each date
+  for (const [dateKey, markets] of marketsByDate) {
+    // Skip if already reported
+    if (positionsData.reportedDates.includes(dateKey)) continue;
+
+    // Find max yesPrice among all markets for this date
+    let maxYesPrice = 0;
+    let triggerMarket: MarketSnapshot | null = null;
+
+    for (const market of markets) {
+      if (market.yesPrice !== null && market.yesPrice > maxYesPrice) {
+        maxYesPrice = market.yesPrice;
+        triggerMarket = market;
+      }
+    }
+
+    // Get or initialize streak info for this date
+    let dateInfo = positionsData.decidedDates[dateKey];
+    if (!dateInfo) {
+      dateInfo = {
+        streakCount: 0,
+        decidedAt: null,
+        triggerMarketId: null,
+        triggerQuestion: null,
+        triggerYesPrice: null,
+      };
+      positionsData.decidedDates[dateKey] = dateInfo;
+    }
+
+    // Check if above threshold
+    if (maxYesPrice >= DECIDED_95_THRESHOLD && triggerMarket) {
+      // Increment streak
+      dateInfo.streakCount += 1;
+
+      // Check if streak requirement met (and not already decided)
+      if (dateInfo.streakCount >= DECIDED_95_STREAK_REQUIRED && dateInfo.decidedAt === null) {
+        // Mark as decided
+        dateInfo.decidedAt = now;
+        dateInfo.triggerMarketId = triggerMarket.marketId;
+        dateInfo.triggerQuestion = triggerMarket.question;
+        dateInfo.triggerYesPrice = maxYesPrice;
+
+        triggeredDates.push({ dateKey, triggerMarket });
+      }
+    } else {
+      // Reset streak if below threshold
+      dateInfo.streakCount = 0;
+    }
+  }
+
+  // Save updated streak data
+  if (marketsByDate.size > 0) {
+    savePositionsFile();
+  }
+
+  return triggeredDates;
+}
+
+// Close all open positions for a date and generate report
+function closePositionsForDate(
+  dateKey: string,
+  triggerMarket: MarketSnapshot,
+  currentMarketSnapshots: MarketSnapshot[]
+): void {
+  // Skip if already reported
+  if (positionsData.reportedDates.includes(dateKey)) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const closedPositionDetails: ClosedPositionDetail[] = [];
+  let totalRealizedPnl = 0;
+  const breakdownByEntrySide = {
+    YES: { count: 0, totalPnl: 0 },
+    NO: { count: 0, totalPnl: 0 },
+  };
+
+  // Find all open positions for this dateKey
+  const positionsToClose: Position[] = [];
+  for (const marketId of Object.keys(positionsData.positions)) {
+    const position = positionsData.positions[marketId];
+    if (position && position.dateKey === dateKey && position.isOpen) {
+      positionsToClose.push(position);
+    }
+  }
+
+  // Close each position
+  for (const position of positionsToClose) {
+    // Find current market snapshot for exit price
+    const currentSnapshot = currentMarketSnapshots.find(s => s.marketId === position.marketId);
+    const exitYesPrice = currentSnapshot?.yesPrice ?? triggerMarket.yesPrice ?? 0.95;
+    const exitNoPrice = 1 - exitYesPrice;
+
+    // Calculate P&L using mark-to-market
+    let realizedPnl: number;
+    if (position.entrySide === 'YES') {
+      realizedPnl = (exitYesPrice - position.entryYesPrice) * position.size;
+    } else {
+      realizedPnl = (exitNoPrice - position.entryNoPrice) * position.size;
+    }
+
+    // Update position
+    position.isOpen = false;
+    position.closedAt = now;
+    position.exitYesPrice = exitYesPrice;
+    position.exitNoPrice = exitNoPrice;
+    position.closeReason = 'DECIDED_95';
+    position.realizedPnl = realizedPnl;
+
+    // Track for report
+    closedPositionDetails.push({
+      marketId: position.marketId,
+      question: position.question,
+      entrySide: position.entrySide,
+      entryYesPrice: position.entryYesPrice,
+      entryNoPrice: position.entryNoPrice,
+      exitYesPrice,
+      exitNoPrice,
+      realizedPnl,
+      openedAt: position.openedAt,
+      closedAt: now,
+    });
+
+    totalRealizedPnl += realizedPnl;
+    breakdownByEntrySide[position.entrySide].count += 1;
+    breakdownByEntrySide[position.entrySide].totalPnl += realizedPnl;
+  }
+
+  // Get decided date info
+  const dateInfo = positionsData.decidedDates[dateKey];
+
+  // Generate report
+  const report: EarlyCloseReport = {
+    dateKey,
+    decidedAt: dateInfo?.decidedAt ?? now,
+    decidedMarketId: dateInfo?.triggerMarketId ?? triggerMarket.marketId,
+    decidedQuestion: dateInfo?.triggerQuestion ?? triggerMarket.question,
+    decidedYesPrice: dateInfo?.triggerYesPrice ?? (triggerMarket.yesPrice ?? 0.95),
+    numberOfPositionsClosed: positionsToClose.length,
+    totalRealizedPnl,
+    breakdownByEntrySide,
+    closedPositions: closedPositionDetails,
+  };
+
+  // Save report
+  appendDailyReport(report);
+
+  // Mark date as reported
+  positionsData.reportedDates.push(dateKey);
+  savePositionsFile();
+
+  // Log to terminal
+  const pnlSign = totalRealizedPnl >= 0 ? '+' : '';
+  console.log(`[Position] Date ${dateKey} DECIDED_95 (streak: ${dateInfo?.streakCount ?? 2}) - closing ${positionsToClose.length} position(s)`);
+  console.log(`[Position] Closed ${positionsToClose.length} position(s) for ${dateKey}: Total P&L: ${pnlSign}$${totalRealizedPnl.toFixed(2)}`);
+}
+
+// Process all position management for a market check
+function processPositionManagement(marketSnapshots: MarketSnapshot[]): void {
+  // Step 1: Create positions for executed trades
+  for (const snapshot of marketSnapshots) {
+    if (snapshot.executed) {
+      createPositionIfNeeded(snapshot);
+    }
+  }
+
+  // Step 2: Check for DECIDED_95 conditions
+  const triggeredDates = checkDecided95(marketSnapshots);
+
+  // Step 3: Close positions and generate reports for triggered dates
+  for (const { dateKey, triggerMarket } of triggeredDates) {
+    closePositionsForDate(dateKey, triggerMarket, marketSnapshots);
+  }
+}
+
+// Load positions data on startup
+function loadPositionsData(): void {
+  positionsData = loadPositionsFile();
+  const openPositionCount = Object.values(positionsData.positions).filter(p => p.isOpen).length;
+  const decidedDateCount = Object.values(positionsData.decidedDates).filter(d => d.decidedAt !== null).length;
+  console.log(`Loaded ${openPositionCount} open position(s), ${decidedDateCount} decided date(s), ${positionsData.reportedDates.length} reported date(s).`);
+}
+
 // Load already settled markets on startup
 function loadSettledMarketIds(): void {
   const settlements = readSettlementLog();
@@ -747,6 +1108,9 @@ async function checkMarketOdds(isInitialRun: boolean = false): Promise<void> {
         console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
       });
 
+      // Process position management (create positions, check DECIDED_95, close positions)
+      processPositionManagement(marketSnapshots);
+
       // Log entry with current weather forecasts
       const entry: MonitoringEntry = {
         timestamp: new Date().toISOString(),
@@ -879,11 +1243,16 @@ async function startMonitoring(): Promise<void> {
   console.log(`Settlement checks at :${SETTLEMENT_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
   console.log(`Settlement log: ${getSettlementLogFilePath()}`);
+  console.log(`Positions file: ${POSITIONS_FILE_PATH}`);
+  console.log(`Daily reports: ${DAILY_REPORTS_FILE_PATH}`);
   console.log('='.repeat(60));
 
   // Load already settled markets to avoid duplicate processing
   loadSettledMarketIds();
   console.log(`Loaded ${settledMarketIds.size} previously settled market(s).`);
+
+  // Load positions data for early closing system
+  loadPositionsData();
 
   // Initialize trading client (for future trading functionality)
   console.log('\n--- Initialization ---');
