@@ -14,16 +14,10 @@ import { getLogFilePath, getSettlementLogFilePath, appendToLog, type MonitoringE
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
 import { getEnvConfig } from './config/env.js';
+import { HOST, CHAIN_ID, MARKET_CHECK_MINUTES, WEATHER_CHECK_MINUTES } from './config/constants.js';
 
 // Validate environment variables at startup (exits with clear error if missing)
 const { PRIVATE_KEY, OPENWEATHER_API_KEY } = getEnvConfig();
-
-const HOST = 'https://clob.polymarket.com';
-const CHAIN_ID = 137;
-
-// Scheduling configuration
-const MARKET_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes (includes settlement)
-const WEATHER_CHECK_MINUTES = [0, 10, 20, 30, 40, 50]; // Run every 10 minutes
 
 // State to track latest weather forecasts (only updates hourly)
 let latestWeatherForecasts: WeatherForecast[] = [];

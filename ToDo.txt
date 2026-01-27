@@ -19,18 +19,22 @@ HIGH PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 2. Consolidate hardcoded constants into config file
+[x] 2. Consolidate hardcoded constants into config file
 
-    Create src/config/constants.ts with all magic numbers:
+    COMPLETED: Created src/config/constants.ts with all magic numbers:
     - DECIDED_95_THRESHOLD (0.95)
     - DECIDED_95_STREAK_REQUIRED (2)
     - MARKET_CHECK_MINUTES ([0, 10, 20, 30, 40, 50])
     - WEATHER_CHECK_MINUTES ([0, 10, 20, 30, 40, 50])
     - EDGE_THRESHOLD (0.05)
     - MARKET_LOOKAHEAD_DAYS (3)
-    - HOST URL
+    - HOST (Polymarket CLOB URL)
     - CHAIN_ID (137)
-    - London coordinates
+    - GAMMA_API_URL (Polymarket Gamma API)
+    - LONDON_LAT, LONDON_LON (coordinates)
+    - OPENWEATHER_FORECAST_ENDPOINT
+    Updated monitor-markets.ts, polymarket.ts, weather.ts, probability-model.ts,
+    and positions/decided-95.ts to import from the centralized config file.
 
 --------------------------------------------------------------------------------
 

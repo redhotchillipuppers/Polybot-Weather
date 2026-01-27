@@ -1,10 +1,7 @@
 // DECIDED_95 early position closing detection logic
 
 import type { MarketSnapshot, PositionsFile } from '../types.js';
-
-// DECIDED_95 threshold constants
-export const DECIDED_95_THRESHOLD = 0.95;
-export const DECIDED_95_STREAK_REQUIRED = 2;
+import { DECIDED_95_THRESHOLD, DECIDED_95_STREAK_REQUIRED } from '../config/constants.js';
 
 // Extract dateKey (YYYY-MM-DD) from endDate string
 export function extractDateKeyFromEndDate(endDate: string): string | null {
