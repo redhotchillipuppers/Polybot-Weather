@@ -233,6 +233,21 @@ function marketToSnapshot(
       console.warn(`  Could not parse market question: ${question.substring(0, 50)}...`);
     }
 
+    // Calculate minutes to close from endDate
+    const endDateStr = safeString(market.endDate, '');
+    let minutesToClose: number | null = null;
+    if (endDateStr) {
+      try {
+        const endTime = new Date(endDateStr).getTime();
+        if (!isNaN(endTime)) {
+          const nowTime = Date.now();
+          minutesToClose = Math.round((endTime - nowTime) / (1000 * 60));
+        }
+      } catch {
+        // Leave as null if parsing fails
+      }
+    }
+
     return {
       marketId: safeString(market.id, 'unknown'),
       question,
@@ -240,7 +255,8 @@ function marketToSnapshot(
       outcomes: outcomes.map(o => safeString(o, 'Unknown')),
       prices,
       yesPrice,
-      endDate: safeString(market.endDate, ''),
+      endDate: endDateStr,
+      minutesToClose,
       volume: safeNumber(market.volume, 0),
       liquidity: safeNumber(market.liquidity, 0),
       modelProbability,
