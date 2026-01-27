@@ -1,15 +1,13 @@
-import dotenv from 'dotenv';
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getLondonWeatherForecast } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
+import { getEnvConfig } from './config/env.js';
 
-// Load environment variables
-dotenv.config();
+// Validate environment variables at startup (exits with clear error if missing)
+const { PRIVATE_KEY, OPENWEATHER_API_KEY } = getEnvConfig();
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY!;
-const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY!;
 const HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
 
