@@ -322,7 +322,24 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
               const date = safeString(forecast.date, 'Unknown date');
               const maxTemp = safeNumber(forecast.maxTemperature, 0);
               const minTemp = safeNumber(forecast.minTemperature, 0);
-              console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C`);
+              let providerNote = '';
+              if (forecast.providerTemps) {
+                const providerDetails: string[] = [];
+                if (forecast.providerTemps.openweather) {
+                  providerDetails.push(
+                    `openweather ${forecast.providerTemps.openweather.max}°C/${forecast.providerTemps.openweather.min}°C`
+                  );
+                }
+                if (forecast.providerTemps.tomorrow) {
+                  providerDetails.push(
+                    `tomorrow ${forecast.providerTemps.tomorrow.max}°C/${forecast.providerTemps.tomorrow.min}°C`
+                  );
+                }
+                if (providerDetails.length > 0) {
+                  providerNote = ` (providers: ${providerDetails.join(', ')})`;
+                }
+              }
+              console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C${providerNote}`);
             }
           }
         }
