@@ -217,17 +217,31 @@ export async function getLondonWeatherForecastTomorrowIO(
 
     const data: TomorrowIOResponse = await response.json();
 
-    const timelines = safeArray(data?.timelines);
-    const dailyFromTimelines = timelines
-      .filter(t => safeString(t?.timestep, '') === '1d')
-      .flatMap(t => safeArray(t?.intervals));
+    const timelineArrays = [
+      safeArray(data?.timelines),
+      safeArray(data?.data?.timelines as unknown as TomorrowIOResponse['timelines']),
+    ];
 
-    const dailyFromData = safeArray(data?.data?.timelines?.daily).map(entry => ({
-      startTime: entry?.time,
-      values: entry?.values,
-    }));
+    const dailyFromTimelines = timelineArrays
+      .flatMap(timelines => timelines)
+      .flatMap(t => {
+        const timestep = safeString(t?.timestep, '');
+        if (timestep && timestep !== '1d') {
+          return [];
+        }
+        return safeArray(t?.intervals);
+      });
 
-    const dailyIntervals = dailyFromTimelines.length > 0 ? dailyFromTimelines : dailyFromData;
+    const dailyFromData = safeArray(data?.data?.timelines?.daily ?? (data as TomorrowIOResponse)?.timelines?.daily).map(
+      entry => ({
+        startTime: entry?.time,
+        values: entry?.values,
+      })
+    );
+
+    const dailyIntervals = dailyFromTimelines.length > 0
+      ? dailyFromTimelines
+      : dailyFromData;
 
     if (dailyIntervals.length === 0) {
       throw new Error('Tomorrow.io API returned empty forecast data');
