@@ -26,7 +26,11 @@ function savePositionsFile(): void {
 }
 
 // Create a position for an executed trade (if not already exists)
-export function createPositionIfNeeded(snapshot: MarketSnapshot): void {
+export function createPositionIfNeeded(
+  snapshot: MarketSnapshot,
+  snapshotId?: string,
+  decisionId?: string
+): void {
   // Only create for executed trades
   if (!snapshot.executed || !snapshot.entrySide || snapshot.entryYesPrice === null || snapshot.entryNoPrice === null) {
     return;
@@ -45,7 +49,7 @@ export function createPositionIfNeeded(snapshot: MarketSnapshot): void {
     return;
   }
 
-  // Create new position
+  // Create new position with correlation IDs
   const position: Position = {
     marketId: snapshot.marketId,
     dateKey,
@@ -61,6 +65,8 @@ export function createPositionIfNeeded(snapshot: MarketSnapshot): void {
     exitNoPrice: null,
     closeReason: null,
     realizedPnl: null,
+    snapshotId,  // Correlation to monitoring snapshot
+    decisionId,  // Correlation to decision record
   };
 
   positionsData.positions[snapshot.marketId] = position;
@@ -172,11 +178,15 @@ export function closePositionsForDate(
 }
 
 // Process all position management for a market check
-export function processPositionManagement(marketSnapshots: MarketSnapshot[]): void {
+export function processPositionManagement(
+  marketSnapshots: MarketSnapshot[],
+  snapshotId?: string,
+  decisionId?: string
+): void {
   // Step 1: Create positions for executed trades
   for (const snapshot of marketSnapshots) {
     if (snapshot.executed) {
-      createPositionIfNeeded(snapshot);
+      createPositionIfNeeded(snapshot, snapshotId, decisionId);
     }
   }
 
