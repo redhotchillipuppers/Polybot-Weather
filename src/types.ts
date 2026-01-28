@@ -5,6 +5,12 @@ export interface WeatherForecast {
   maxTemperature: number;
   minTemperature: number;
   description: string;
+  weatherProvidersUsed?: Array<'openweather' | 'tomorrow'>;
+  weatherSpreadC?: number;
+  providerTemps?: {
+    openweather?: { max: number; min: number };
+    tomorrow?: { max: number; min: number };
+  };
 }
 
 export interface PolymarketMarket {
