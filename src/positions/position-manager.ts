@@ -1,8 +1,9 @@
 // Position management for tracking and closing trading positions
 
-import type { MarketSnapshot, Position, PositionsFile, ClosedPositionDetail, EarlyCloseReport } from '../types.js';
+import type { MarketSnapshot, Position, PositionsFile, ClosedPositionDetail, EarlyCloseReport, SkipReason } from '../types.js';
 import { loadPositionsFile, savePositionsFile as persistPositionsFile, appendDailyReport, POSITIONS_FILE_PATH, DAILY_REPORTS_FILE_PATH } from '../persistence/file-store.js';
 import { checkDecided95, extractDateKeyFromEndDate } from './decided-95.js';
+import type { LadderStats } from '../ladder-coherence.js';
 
 // In-memory positions state
 let positionsData: PositionsFile = {
@@ -25,28 +26,55 @@ function savePositionsFile(): void {
   persistPositionsFile(positionsData);
 }
 
+// Check if a dateKey already has an open position
+function hasOpenPositionForDateKey(dateKey: string): boolean {
+  for (const position of Object.values(positionsData.positions)) {
+    if (position.dateKey === dateKey && position.isOpen) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Create a position for an executed trade (if not already exists)
+// Returns skipReason if position was blocked, null if created or skipped normally
 export function createPositionIfNeeded(
   snapshot: MarketSnapshot,
   snapshotId?: string,
-  decisionId?: string
-): void {
+  decisionId?: string,
+  ladderStats?: Map<string, LadderStats>
+): SkipReason {
   // Only create for executed trades
   if (!snapshot.executed || !snapshot.entrySide || snapshot.entryYesPrice === null || snapshot.entryNoPrice === null) {
-    return;
+    return null;
   }
 
   const dateKey = extractDateKeyFromEndDate(snapshot.endDate);
   if (!dateKey) {
     console.warn(`[Position] Could not extract dateKey from endDate: ${snapshot.endDate}`);
-    return;
+    return null;
   }
 
-  // Check if position already exists and is open
+  // Check if position already exists for this specific market and is open
   const existingPosition = positionsData.positions[snapshot.marketId];
   if (existingPosition && existingPosition.isOpen) {
     // Position already exists and is open, skip
-    return;
+    return null;
+  }
+
+  // Step 3 execution constraint: Check ladder coherence
+  if (ladderStats) {
+    const stats = ladderStats.get(dateKey);
+    if (stats && !stats.ladderCoherent) {
+      console.log(`[Position] Blocked execution for ${snapshot.marketId.substring(0, 8)}...: skipReason=LADDER_INCOHERENT`);
+      return 'LADDER_INCOHERENT';
+    }
+  }
+
+  // Step 3 execution constraint: Check if any open position exists with same dateKey
+  if (hasOpenPositionForDateKey(dateKey)) {
+    console.log(`[Position] Blocked execution for ${snapshot.marketId.substring(0, 8)}...: skipReason=DATEKEY_ALREADY_HAS_POSITION`);
+    return 'DATEKEY_ALREADY_HAS_POSITION';
   }
 
   // Create new position with correlation IDs
@@ -78,6 +106,7 @@ export function createPositionIfNeeded(
   const tempMatch = snapshot.question.match(/(\d+(?:\.\d+)?[°º\s]*C(?:\s+or\s+(?:higher|below))?)/i);
   const tempLabel = tempMatch ? tempMatch[1] : snapshot.marketId.substring(0, 8);
   console.log(`[Position] Opened ${snapshot.entrySide} position on market ${snapshot.marketId.substring(0, 8)}... (${tempLabel})`);
+  return null;
 }
 
 // Close all open positions for a date and generate report
@@ -183,12 +212,13 @@ export function closePositionsForDate(
 export function processPositionManagement(
   marketSnapshots: MarketSnapshot[],
   snapshotId?: string,
-  decisionId?: string
+  decisionId?: string,
+  ladderStats?: Map<string, LadderStats>
 ): void {
-  // Step 1: Create positions for executed trades
+  // Step 1: Create positions for executed trades (with ladder and dateKey gating)
   for (const snapshot of marketSnapshots) {
     if (snapshot.executed) {
-      createPositionIfNeeded(snapshot, snapshotId, decisionId);
+      createPositionIfNeeded(snapshot, snapshotId, decisionId, ladderStats);
     }
   }
 

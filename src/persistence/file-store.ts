@@ -1,6 +1,7 @@
 // File persistence utilities for monitoring, settlement, and position data
 
-import type { WeatherForecast, MarketSnapshot, PositionsFile, EarlyCloseReport, MonitoringSnapshot, DecisionRecord, MarketObservation, MarketDecision } from '../types.js';
+import type { WeatherForecast, MarketSnapshot, PositionsFile, EarlyCloseReport, MonitoringSnapshot, DecisionRecord, MarketObservation, MarketDecision, SkipReason } from '../types.js';
+import type { LadderStats } from '../ladder-coherence.js';
 import {
   initializeLogDirectories,
   getMonitoringLogPath,
@@ -90,8 +91,31 @@ export function toMarketObservation(snapshot: MarketSnapshot): MarketObservation
 
 /**
  * Convert MarketSnapshot to MarketDecision (model outputs only)
+ * If skipReason is provided, forces signal to HOLD and edge to 0
  */
-export function toMarketDecision(snapshot: MarketSnapshot, dateKey: string): MarketDecision {
+export function toMarketDecision(
+  snapshot: MarketSnapshot,
+  dateKey: string,
+  skipReason: SkipReason = null
+): MarketDecision {
+  // Apply gating if skipReason is set
+  if (skipReason) {
+    return {
+      marketId: snapshot.marketId,
+      dateKey,
+      modelProbability: snapshot.modelProbability,
+      edge: 0,
+      edgePercent: 0,
+      signal: 'HOLD',
+      forecastError: snapshot.forecastError,
+      executed: false,
+      entrySide: null,
+      entryYesPrice: null,
+      entryNoPrice: null,
+      skipReason,
+    };
+  }
+
   return {
     marketId: snapshot.marketId,
     dateKey,
@@ -131,11 +155,13 @@ export function appendMonitoringSnapshot(
 /**
  * Create and append a decision record (model outputs)
  * Returns the decisionId for correlation
+ * Applies ladder coherence gating when ladderStats is provided
  */
 export function appendDecisionRecord(
   snapshotId: string,
   markets: MarketSnapshot[],
-  dateKeyExtractor: (endDate: string) => string | null
+  dateKeyExtractor: (endDate: string) => string | null,
+  ladderStats?: Map<string, LadderStats>
 ): string {
   const decisionId = generateId();
   const decisions: MarketDecision[] = [];
@@ -143,7 +169,15 @@ export function appendDecisionRecord(
   for (const market of markets) {
     const dateKey = dateKeyExtractor(market.endDate);
     if (dateKey) {
-      decisions.push(toMarketDecision(market, dateKey));
+      // Check ladder coherence for this dateKey
+      let skipReason: SkipReason = null;
+      if (ladderStats) {
+        const stats = ladderStats.get(dateKey);
+        if (stats && !stats.ladderCoherent) {
+          skipReason = 'LADDER_INCOHERENT';
+        }
+      }
+      decisions.push(toMarketDecision(market, dateKey, skipReason));
     }
   }
 

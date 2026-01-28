@@ -161,6 +161,9 @@ export interface MonitoringSnapshot {
   markets: MarketObservation[];
 }
 
+// Skip reasons for decision gating
+export type SkipReason = 'LADDER_INCOHERENT' | 'DATEKEY_ALREADY_HAS_POSITION' | null;
+
 // Decision output for a single market
 export interface MarketDecision {
   marketId: string;
@@ -174,6 +177,7 @@ export interface MarketDecision {
   entrySide: 'YES' | 'NO' | null;
   entryYesPrice: number | null;
   entryNoPrice: number | null;
+  skipReason?: SkipReason;      // Reason for forcing HOLD (if any)
 }
 
 // Decision record (model outputs and signals)
