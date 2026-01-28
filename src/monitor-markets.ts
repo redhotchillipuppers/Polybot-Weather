@@ -1,7 +1,7 @@
 // Market monitoring script - collects weather forecasts and market odds over time
 import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
-import { getWeatherForDates } from './weather.js';
+import { getWeatherForDatesMulti } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
 import type { WeatherForecast, PolymarketMarket, MarketSnapshot } from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
@@ -24,7 +24,7 @@ import { getEnvConfig } from './config/env.js';
 import { HOST, CHAIN_ID, MARKET_CHECK_MINUTES } from './config/constants.js';
 
 // Validate environment variables at startup (exits with clear error if missing)
-const { PRIVATE_KEY, OPENWEATHER_API_KEY } = getEnvConfig();
+const { PRIVATE_KEY, OPENWEATHER_API_KEY, TOMORROW_API_KEY } = getEnvConfig();
 
 // State to track latest weather forecasts (only updates hourly)
 let latestWeatherForecasts: WeatherForecast[] = [];
@@ -292,7 +292,14 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
       const previousForecasts = [...latestWeatherForecasts];
 
       // Fetch weather for each market date
-      const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
+      const forecasts = await getWeatherForDatesMulti(
+        {
+          openWeather: OPENWEATHER_API_KEY,
+          ...(TOMORROW_API_KEY ? { tomorrow: TOMORROW_API_KEY } : {}),
+        },
+        marketDates,
+        'best_effort'
+      );
       const newForecasts = safeArray(forecasts);
 
       // Check if temperatures changed

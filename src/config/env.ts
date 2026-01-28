@@ -20,6 +20,7 @@ const REQUIRED_ENV_VARS = [
 interface EnvConfig {
   PRIVATE_KEY: string;
   OPENWEATHER_API_KEY: string;
+  TOMORROW_API_KEY?: string;
 }
 
 /**
@@ -55,6 +56,7 @@ export function validateEnv(): EnvConfig {
       'Example .env file:',
       '  PRIVATE_KEY=your_ethereum_private_key_here',
       '  OPENWEATHER_API_KEY=your_openweather_api_key_here',
+      '  TOMORROW_API_KEY=your_tomorrow_io_api_key_here',
       '',
       '='.repeat(60),
     ].join('\n');
@@ -68,6 +70,7 @@ export function validateEnv(): EnvConfig {
   return {
     PRIVATE_KEY: process.env.PRIVATE_KEY!,
     OPENWEATHER_API_KEY: process.env.OPENWEATHER_API_KEY!,
+    ...(process.env.TOMORROW_API_KEY ? { TOMORROW_API_KEY: process.env.TOMORROW_API_KEY } : {}),
   };
 }
 
