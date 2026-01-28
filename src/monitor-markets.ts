@@ -10,7 +10,14 @@ import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge 
 // Import from new modules
 import { parseMarketQuestion, extractDateFromQuestion, extractTemperatureFromQuestion } from './parsers/market-parser.js';
 import { ClockAlignedScheduler } from './scheduler.js';
-import { getLogFilePath, getSettlementLogFilePath, appendToLog, type MonitoringEntry } from './persistence/file-store.js';
+import {
+  getLogFilePath,
+  getSettlementLogFilePath,
+  initializeLogs,
+  appendMonitoringSnapshot,
+  appendDecisionRecord,
+} from './persistence/file-store.js';
+import { getDecisionsLogPath } from './persistence/log-utils.js';
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
 import { getEnvConfig } from './config/env.js';
@@ -367,22 +374,31 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
       console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
     });
 
+    // Log monitoring snapshot (raw observation data) - returns snapshotId for correlation
+    const snapshotId = appendMonitoringSnapshot(
+      safeArray(latestWeatherForecasts),
+      marketSnapshots
+    );
+
+    // Log decision record (model outputs) - returns decisionId for correlation
+    const decisionId = appendDecisionRecord(
+      snapshotId,
+      marketSnapshots,
+      (endDate: string) => {
+        try {
+          return endDate ? new Date(endDate).toISOString().split('T')[0] ?? null : null;
+        } catch {
+          return null;
+        }
+      }
+    );
+
     // Process position management (create positions, check DECIDED_95, close positions)
-    processPositionManagement(marketSnapshots);
+    // Pass correlation IDs for tracing
+    processPositionManagement(marketSnapshots, snapshotId, decisionId);
 
     // Run settlement check using the same market data
     await runSettlementPass(marketSnapshots);
-
-    // Log entry with current weather forecasts and markets
-    const entry: MonitoringEntry = {
-      timestamp: new Date().toISOString(),
-      entryType: 'combined',
-      weatherForecast: latestWeatherForecasts[0] ?? null,
-      weatherForecasts: safeArray(latestWeatherForecasts),
-      markets: marketSnapshots,
-    };
-
-    appendToLog(entry);
 
   } catch (error) {
     console.error(`  Error in scheduled check: ${formatError(error)}`);
@@ -422,15 +438,21 @@ async function initializeClient(): Promise<ClobClient> {
 
 // Main monitoring function
 async function startMonitoring(): Promise<void> {
+  // Initialize log directories before anything else
+  initializeLogs();
+
   console.log('='.repeat(60));
   console.log('POLYMARKET WEATHER MONITORING');
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
   console.log(`Scheduled checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
-  console.log(`Log file: ${getLogFilePath()}`);
-  console.log(`Settlement log: ${getSettlementLogFilePath()}`);
-  console.log(`Positions file: ${getPositionsFilePath()}`);
-  console.log(`Daily reports: ${getDailyReportsFilePath()}`);
+  console.log('');
+  console.log('Log files:');
+  console.log(`  Monitoring: ${getLogFilePath()}`);
+  console.log(`  Decisions:  ${getDecisionsLogPath()}`);
+  console.log(`  Settlement: ${getSettlementLogFilePath()}`);
+  console.log(`  Positions:  ${getPositionsFilePath()}`);
+  console.log(`  Reports:    ${getDailyReportsFilePath()}`);
   console.log('='.repeat(60));
 
   // Load already settled markets to avoid duplicate processing

@@ -77,6 +77,9 @@ export interface Position {
   exitNoPrice: number | null;
   closeReason: 'DECIDED_95' | 'OFFICIAL_SETTLEMENT' | null;
   realizedPnl: number | null;
+  // Correlation IDs for tracing back to logs
+  snapshotId?: string | undefined;    // Reference to MonitoringSnapshot that led to this position
+  decisionId?: string | undefined;    // Reference to DecisionRecord that led to this position
 }
 
 export interface DecidedDateInfo {
@@ -119,4 +122,55 @@ export interface EarlyCloseReport {
     NO: { count: number; totalPnl: number };
   };
   closedPositions: ClosedPositionDetail[];
+}
+
+// ============================================================
+// SPLIT LOGGING TYPES
+// ============================================================
+
+// Raw market observation data (excludes decision/signal fields)
+export interface MarketObservation {
+  marketId: string;
+  question: string;
+  temperatureValue: string | null;
+  outcomes: string[];
+  prices: number[];
+  yesPrice: number | null;
+  endDate: string;
+  minutesToClose: number | null;
+  volume: number;
+  liquidity: number;
+  isTradeable: boolean;
+}
+
+// Monitoring snapshot record (raw observation data)
+export interface MonitoringSnapshot {
+  snapshotId: string;           // UUID for correlation
+  timestamp: string;            // ISO timestamp
+  entryType: 'market_check' | 'weather_check';
+  weatherForecasts: WeatherForecast[];
+  markets: MarketObservation[];
+}
+
+// Decision output for a single market
+export interface MarketDecision {
+  marketId: string;
+  dateKey: string;              // Target market date (YYYY-MM-DD)
+  modelProbability: number | null;
+  edge: number | null;
+  edgePercent: number | null;
+  signal: 'BUY' | 'SELL' | 'HOLD' | null;
+  forecastError: number | null;
+  executed: boolean;
+  entrySide: 'YES' | 'NO' | null;
+  entryYesPrice: number | null;
+  entryNoPrice: number | null;
+}
+
+// Decision record (model outputs and signals)
+export interface DecisionRecord {
+  decisionId: string;           // UUID for correlation
+  snapshotId: string;           // Reference to monitoring snapshot
+  timestamp: string;            // ISO timestamp
+  decisions: MarketDecision[];
 }
