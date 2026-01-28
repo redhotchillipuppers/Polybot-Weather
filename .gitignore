@@ -3,3 +3,4 @@ node_modules/
 dist/
 # Logs
 logs/
+back_up-logs/
