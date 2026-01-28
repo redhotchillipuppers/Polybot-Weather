@@ -56,3 +56,18 @@ export const DECIDED_95_STREAK_REQUIRED = 2;
 
 /** Minimum edge threshold for trade signals (5%) */
 export const EDGE_THRESHOLD = 0.05;
+
+/** Minimum market liquidity required before entering trades (USD) */
+export const MIN_TRADE_LIQUIDITY = 150;
+
+/** Minimum market volume required before entering trades (USD) */
+export const MIN_TRADE_VOLUME = 75;
+
+/** Price tolerance for identifying initialization/default prices */
+export const DEFAULT_PRICE_EPSILON = 0.002;
+
+/** Default initialization price pairs to avoid trading */
+export const DEFAULT_PRICE_PAIRS = [
+  { yes: 0.495, no: 0.505 },
+  { yes: 0.5, no: 0.5 },
+] as const;
