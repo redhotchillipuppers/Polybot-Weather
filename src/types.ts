@@ -71,6 +71,9 @@ export interface Position {
   entryYesPrice: number;
   entryNoPrice: number;
   openedAt: string;       // ISO timestamp
+  // Model inputs at execution time (for post-mortems)
+  modelProbability: number | null;
+  edge: number | null;
   isOpen: boolean;
   closedAt: string | null;
   exitYesPrice: number | null;

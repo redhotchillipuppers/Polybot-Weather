@@ -59,6 +59,8 @@ export function createPositionIfNeeded(
     entryYesPrice: snapshot.entryYesPrice,
     entryNoPrice: snapshot.entryNoPrice,
     openedAt: new Date().toISOString(),
+    modelProbability: snapshot.modelProbability,
+    edge: snapshot.edge,
     isOpen: true,
     closedAt: null,
     exitYesPrice: null,
