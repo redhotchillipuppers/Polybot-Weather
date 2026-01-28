@@ -21,7 +21,15 @@ import { getDecisionsLogPath } from './persistence/log-utils.js';
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
 import { getEnvConfig } from './config/env.js';
-import { HOST, CHAIN_ID, MARKET_CHECK_MINUTES } from './config/constants.js';
+import {
+  HOST,
+  CHAIN_ID,
+  MARKET_CHECK_MINUTES,
+  MIN_TRADE_LIQUIDITY,
+  MIN_TRADE_VOLUME,
+  DEFAULT_PRICE_EPSILON,
+  DEFAULT_PRICE_PAIRS,
+} from './config/constants.js';
 
 // Validate environment variables at startup (exits with clear error if missing)
 const { PRIVATE_KEY, OPENWEATHER_API_KEY, TOMORROW_API_KEY } = getEnvConfig();
@@ -55,6 +63,7 @@ function marketToSnapshot(
     const outcomes = safeArray(market.outcomes);
     const prices = safeArray(market.prices).map(p => safeNumber(p, 0));
     const question = safeString(market.question, 'Unknown market');
+    const marketId = safeString(market.id, 'unknown');
 
     // Find YES price (typically first outcome or explicit "Yes")
     let yesPrice: number | null = null;
@@ -66,6 +75,15 @@ function marketToSnapshot(
     } else if (prices.length > 0) {
       yesPrice = prices[0] ?? null; // Default to first price
     }
+
+    const noIndex = outcomes.findIndex(o =>
+      typeof o === 'string' && (o.toLowerCase() === 'no' || o.toLowerCase().includes('no'))
+    );
+    const noPriceFromMarket = noIndex !== -1 && prices[noIndex] !== undefined
+      ? prices[noIndex] ?? null
+      : null;
+    const derivedNoPrice = yesPrice !== null ? 1 - yesPrice : null;
+    const noPrice = noPriceFromMarket ?? derivedNoPrice;
 
     // Calculate model probability and edge
     let modelProbability: number | null = null;
@@ -147,8 +165,38 @@ function marketToSnapshot(
 
     // Compute executability fields
     const liquidity = safeNumber(market.liquidity, 0);
-    const isTradeable = yesPrice !== null && yesPrice > 0 && liquidity > 0;
+    const volume = safeNumber(market.volume, 0);
+    const hasValidPrice = yesPrice !== null && yesPrice > 0;
+    const meetsLiquidity = liquidity >= MIN_TRADE_LIQUIDITY;
+    const meetsVolume = volume >= MIN_TRADE_VOLUME;
+    const isDefaultPrice = yesPrice !== null && noPrice !== null
+      ? DEFAULT_PRICE_PAIRS.some(pair =>
+        Math.abs(yesPrice - pair.yes) <= DEFAULT_PRICE_EPSILON &&
+        Math.abs(noPrice - pair.no) <= DEFAULT_PRICE_EPSILON
+      ) || DEFAULT_PRICE_PAIRS.some(pair =>
+        Math.abs(yesPrice - pair.no) <= DEFAULT_PRICE_EPSILON &&
+        Math.abs(noPrice - pair.yes) <= DEFAULT_PRICE_EPSILON
+      )
+      : false;
+    const isTradeable = hasValidPrice && meetsLiquidity && meetsVolume && !isDefaultPrice;
     const executed = signal !== null && signal !== 'HOLD' && isTradeable;
+
+    if (signal !== null && signal !== 'HOLD' && !isTradeable) {
+      const reasons: string[] = [];
+      if (!hasValidPrice) {
+        reasons.push('invalid price');
+      }
+      if (!meetsLiquidity) {
+        reasons.push(`insufficient liquidity ($${liquidity.toFixed(2)} < $${MIN_TRADE_LIQUIDITY})`);
+      }
+      if (!meetsVolume) {
+        reasons.push(`insufficient volume ($${volume.toFixed(2)} < $${MIN_TRADE_VOLUME})`);
+      }
+      if (isDefaultPrice) {
+        reasons.push(`initialization price (${yesPrice?.toFixed(3)}/${noPrice?.toFixed(3)})`);
+      }
+      console.log(`  Skipping trade for ${marketId.substring(0, 8)}...: ${reasons.join(', ')}`);
+    }
 
     // Entry fields - only set when executed === true
     // BUY → "YES", SELL → "NO"
@@ -163,7 +211,7 @@ function marketToSnapshot(
     }
 
     return {
-      marketId: safeString(market.id, 'unknown'),
+      marketId,
       question,
       temperatureValue: extractTemperatureFromQuestion(question),
       outcomes: outcomes.map(o => safeString(o, 'Unknown')),
@@ -171,7 +219,7 @@ function marketToSnapshot(
       yesPrice,
       endDate: endDateStr,
       minutesToClose,
-      volume: safeNumber(market.volume, 0),
+      volume,
       liquidity,
       modelProbability,
       edge,
