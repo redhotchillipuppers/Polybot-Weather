@@ -254,23 +254,27 @@ export function calculateMarketProbability(
 ): number {
   switch (bracketType) {
     case 'or_higher':
-      // "X or higher" means actual temp >= X
-      // For "9C or higher", we want P(temp >= 9)
+      // "X or higher" means actual temp >= X, which rounds to X or above
+      // For "9C or higher", we want P(temp > 8.5) to seamlessly connect
+      // with the "8C exact" bucket [7.5, 8.5)
+      // Using bracketValue - 0.5 ensures complete coverage with no gaps
       return calculateBracketProbability(
         forecastTemp,
         hoursUntilResolution,
-        bracketValue,
+        bracketValue - 0.5,
         null
       );
 
     case 'or_below':
-      // "X or below" means actual temp <= X
-      // For "3C or below", we want P(temp <= 3)
+      // "X or below" means actual temp <= X, which rounds to X or below
+      // For "5C or below", we want P(temp <= 5.5) to seamlessly connect
+      // with the "6C exact" bucket (5.5, 6.5]
+      // Using bracketValue + 0.5 ensures complete coverage with no gaps
       return calculateBracketProbability(
         forecastTemp,
         hoursUntilResolution,
         null,
-        bracketValue
+        bracketValue + 0.5
       );
 
     case 'exact':

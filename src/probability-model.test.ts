@@ -93,8 +93,10 @@ assertApproxEqual(prob3, 0.00, 0.01, '"3°C or below" with forecast 8.2°C, 22h 
 // ============================================================
 console.log('\n--- Test: calculateMarketProbability ---\n');
 
+// With forecast 8.2°C and sigma=1.5, "9°C or higher" means P(X > 8.5)
+// P(X > 8.5) = 1 - Φ((8.5 - 8.2) / 1.5) = 1 - Φ(0.2) ≈ 0.42
 const marketProb1 = calculateMarketProbability(8.2, 22, 'or_higher', 9);
-assertApproxEqual(marketProb1, 0.30, 0.02, 'Market: "9°C or higher"');
+assertApproxEqual(marketProb1, 0.42, 0.02, 'Market: "9°C or higher"');
 
 const marketProb2 = calculateMarketProbability(8.2, 22, 'exact', 8);
 assertApproxEqual(marketProb2, 0.26, 0.02, 'Market: "exactly 8°C"');
