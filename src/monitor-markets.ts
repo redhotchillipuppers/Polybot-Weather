@@ -17,6 +17,7 @@ import {
   appendMonitoringSnapshot,
   appendDecisionRecord,
 } from './persistence/file-store.js';
+import { computeLadderCoherence, type LadderStats } from './ladder-coherence.js';
 import { getDecisionsLogPath } from './persistence/log-utils.js';
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
@@ -446,6 +447,16 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
       console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
     });
 
+    // Compute ladder coherence for all dateKeys
+    const ladderStats = computeLadderCoherence(marketSnapshots);
+
+    // Log incoherent ladders
+    for (const [dateKey, stats] of ladderStats) {
+      if (!stats.ladderCoherent) {
+        console.log(`  [Ladder] ${dateKey} INCOHERENT: sum=${stats.ladderYesSum.toFixed(2)}, mean=${stats.ladderMeanYes.toFixed(2)}, std=${stats.ladderStdYes.toFixed(3)}, maxGap=${stats.ladderMaxGap}`);
+      }
+    }
+
     // Log monitoring snapshot (raw observation data) - returns snapshotId for correlation
     const snapshotId = appendMonitoringSnapshot(
       safeArray(latestWeatherForecasts),
@@ -453,6 +464,7 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
     );
 
     // Log decision record (model outputs) - returns decisionId for correlation
+    // Applies ladder coherence gating
     const decisionId = appendDecisionRecord(
       snapshotId,
       marketSnapshots,
@@ -462,12 +474,13 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
         } catch {
           return null;
         }
-      }
+      },
+      ladderStats
     );
 
     // Process position management (create positions, check DECIDED_95, close positions)
-    // Pass correlation IDs for tracing
-    processPositionManagement(marketSnapshots, snapshotId, decisionId);
+    // Pass correlation IDs for tracing and ladder stats for gating
+    processPositionManagement(marketSnapshots, snapshotId, decisionId, ladderStats);
 
     // Run settlement check using the same market data
     await runSettlementPass(marketSnapshots);
