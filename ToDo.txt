@@ -8,9 +8,9 @@ Based on: Code review of entire codebase
 
 Progress Summary:
   HIGH PRIORITY:    3/4 complete (75%)
-  MEDIUM PRIORITY:  0/4 complete (0%)
+  MEDIUM PRIORITY:  1/4 complete (25%)
   LOW PRIORITY:     1/4 complete (25%)
-  OVERALL:          4/12 complete (33%)
+  OVERALL:          5/12 complete (42%)
 
 ================================================================================
 HIGH PRIORITY
@@ -101,15 +101,18 @@ MEDIUM PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 7. Write tests for critical business logic
+[x] 7. Write tests for critical business logic
 
-    Currently only probability-model.test.ts exists (236 lines).
-    Add tests for:
-    - Position management (createPositionIfNeeded, closePositionsForDate)
-    - DECIDED_95 detection logic
-    - Settlement P&L calculations
-    - Market question parsing (parseMarketQuestion, extractDateFromQuestion)
-    - Date extraction from end dates
+    COMPLETED: Added comprehensive test suites for all critical business logic:
+    - src/positions/decided-95.test.ts (28 tests): DECIDED_95 detection logic,
+      extractDateKeyFromEndDate, isExactTemperatureMarket, streak tracking
+    - src/positions/position-manager.test.ts (17 tests): Mark-to-market P&L
+      calculations for YES/NO positions, edge cases, DECIDED_95 scenarios
+    - src/settlement/settlement.test.ts (27 tests): Settlement P&L calculations
+      (calculateTradePnl), null handling, symmetry verification
+    - src/parsers/market-parser.test.ts (40 tests): parseMarketQuestion,
+      extractTemperatureFromQuestion, extractDateFromQuestion, all month names
+    Total: 112 new tests across 4 test files. Run with: npx tsx src/<path>.test.ts
 
 --------------------------------------------------------------------------------
 
