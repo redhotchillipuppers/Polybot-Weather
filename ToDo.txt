@@ -38,13 +38,13 @@ HIGH PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 3. Remove duplicate market API calls
+[x] 3. Remove duplicate market API calls
 
-    checkWeatherForecast() and checkMarketOdds() both run every 10 minutes
-    and both call queryLondonTemperatureMarkets() separately.
-
-    Refactor to fetch markets once and share the result between both
-    functions, or combine into a single scheduled task.
+    COMPLETED: Combined checkWeatherForecast() and checkMarketOdds() into
+    a single runScheduledCheck() function that fetches markets once and
+    shares the result for both weather date extraction and odds analysis.
+    Changed from two separate schedulers to one combined scheduler.
+    Updated src/monitor-markets.ts.
 
 --------------------------------------------------------------------------------
 
