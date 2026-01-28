@@ -14,7 +14,7 @@ import { getLogFilePath, getSettlementLogFilePath, appendToLog, type MonitoringE
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
 import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
 import { getEnvConfig } from './config/env.js';
-import { HOST, CHAIN_ID, MARKET_CHECK_MINUTES, WEATHER_CHECK_MINUTES } from './config/constants.js';
+import { HOST, CHAIN_ID, MARKET_CHECK_MINUTES } from './config/constants.js';
 
 // Validate environment variables at startup (exits with clear error if missing)
 const { PRIVATE_KEY, OPENWEATHER_API_KEY } = getEnvConfig();
@@ -260,160 +260,132 @@ function getTemperatureChanges(
   return changes;
 }
 
-// Check market odds (runs every 10 minutes)
-async function checkMarketOdds(isInitialRun: boolean = false): Promise<void> {
+// Combined market and weather check (runs every 10 minutes)
+// Fetches markets once and uses the result for both weather and odds analysis
+async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
   const timestamp = formatTimestamp();
-  console.log(`\n[${timestamp}] Market odds`);
+  console.log(`\n[${timestamp}] Scheduled check`);
 
   try {
+    // Fetch markets ONCE - used for both weather dates and odds analysis
     const markets = await queryLondonTemperatureMarkets();
 
     if (!markets || markets.length === 0) {
       console.log('  No London temperature markets found.');
       previousMarketCount = 0;
-    } else {
-      // Convert markets to snapshots first
-      const marketSnapshots = safeArray(markets)
-        .map(m => marketToSnapshot(m, latestWeatherForecasts))
-        .filter((s): s is MarketSnapshot => s !== null);
-
-      // Show full market questions only on initial run or if count changed
-      const marketCountChanged = markets.length !== previousMarketCount;
-      if (isInitialRun || marketCountChanged) {
-        if (marketCountChanged && !isInitialRun) {
-          console.log(`  Market count changed: ${previousMarketCount} → ${markets.length}`);
-        }
-        console.log(`  ${markets.length} market(s):`);
-        marketSnapshots.forEach((snapshot, index) => {
-          console.log(`    ${index + 1}. ${snapshot.question}`);
-        });
-        console.log('');
-      }
-      previousMarketCount = markets.length;
-
-      // Always show the probability/edge table (compact format)
-      marketSnapshots.forEach((snapshot, index) => {
-        // Format market price
-        const marketPct = snapshot.yesPrice !== null
-          ? (snapshot.yesPrice * 100).toFixed(1) + '%'
-          : 'N/A';
-
-        // Format model probability
-        const modelPct = snapshot.modelProbability !== null
-          ? (snapshot.modelProbability * 100).toFixed(1) + '%'
-          : 'N/A';
-
-        // Format edge (only show if significant > 5%)
-        let edgeStr = '';
-        if (snapshot.edge !== null && Math.abs(snapshot.edge) > 0.05) {
-          const edgeSign = snapshot.edge >= 0 ? '+' : '';
-          edgeStr = ` Edge:${edgeSign}${(snapshot.edge * 100).toFixed(1)}%`;
-        }
-
-        // Format signal
-        const signalStr = snapshot.signal && snapshot.signal !== 'HOLD' ? ` [${snapshot.signal}]` : '';
-
-        // Extract short temp label from question (e.g., "8°C" from "Will the highest recorded temperature...")
-        const tempMatch = snapshot.question.match(/(\d+(?:\.\d+)?)\s*[°º]?\s*C/i);
-        const tempLabel = tempMatch ? `${tempMatch[1]}°C` : `#${index + 1}`;
-
-        console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
-      });
-
-      // Process position management (create positions, check DECIDED_95, close positions)
-      processPositionManagement(marketSnapshots);
-
-      // Run settlement check using the same market data (avoids duplicate API calls)
-      await runSettlementPass(marketSnapshots);
-
-      // Log entry with current weather forecasts
-      const entry: MonitoringEntry = {
-        timestamp: new Date().toISOString(),
-        entryType: 'market_check',
-        weatherForecast: latestWeatherForecasts[0] ?? null,
-        weatherForecasts: safeArray(latestWeatherForecasts),
-        markets: marketSnapshots,
-      };
-
-      appendToLog(entry);
+      return;
     }
 
-  } catch (error) {
-    console.error(`  Error checking market odds: ${formatError(error)}`);
-  }
-}
-
-// Fetch weather forecast (runs every 10 minutes)
-async function checkWeatherForecast(isInitialRun: boolean = false): Promise<void> {
-  const timestamp = formatTimestamp();
-  console.log(`\n[${timestamp}] Weather update`);
-
-  try {
-    // First, fetch markets to know what dates we need weather for
-    const markets = await queryLondonTemperatureMarkets();
-
+    // --- Weather Update ---
     // Extract unique dates from market end dates
     const marketDates = extractUniqueDatesFromMarkets(markets);
 
-    if (marketDates.length === 0) {
-      console.log('  No market dates found, skipping weather fetch.');
-      return;
-    }
+    if (marketDates.length > 0) {
+      // Store previous forecasts for comparison
+      const previousForecasts = [...latestWeatherForecasts];
 
-    // Store previous forecasts for comparison
-    const previousForecasts = [...latestWeatherForecasts];
+      // Fetch weather for each market date
+      const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
+      const newForecasts = safeArray(forecasts);
 
-    // Fetch weather for each market date
-    const forecasts = await getWeatherForDates(OPENWEATHER_API_KEY, marketDates);
-    const newForecasts = safeArray(forecasts);
+      // Check if temperatures changed
+      if (!areForecastsIdentical(previousForecasts, newForecasts)) {
+        // Update stored forecasts
+        latestWeatherForecasts = newForecasts;
 
-    // Check if temperatures are identical to last check
-    if (areForecastsIdentical(previousForecasts, newForecasts)) {
-      const dateList = marketDates.map(d => d.toISOString().split('T')[0]).join(', ');
-      console.log(`  Weather for ${marketDates.length} date(s) unchanged (${dateList})`);
-      return;
-    }
-
-    // Update stored forecasts
-    latestWeatherForecasts = newForecasts;
-
-    // Show changes in compact format if we have previous data
-    if (previousForecasts.length > 0 && !isInitialRun) {
-      const changes = getTemperatureChanges(previousForecasts, newForecasts);
-      for (const change of changes) {
-        console.log(`  ${change}`);
-      }
-    } else {
-      // First run - show consolidated weather info
-      const dateList = latestWeatherForecasts.map(f => f.date).join(', ');
-      console.log(`  Weather for ${latestWeatherForecasts.length} date(s): ${dateList}`);
-      for (const forecast of latestWeatherForecasts) {
-        if (forecast) {
-          const date = safeString(forecast.date, 'Unknown date');
-          const maxTemp = safeNumber(forecast.maxTemperature, 0);
-          const minTemp = safeNumber(forecast.minTemperature, 0);
-          console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C`);
+        // Show changes in compact format if we have previous data
+        if (previousForecasts.length > 0 && !isInitialRun) {
+          const changes = getTemperatureChanges(previousForecasts, newForecasts);
+          for (const change of changes) {
+            console.log(`  ${change}`);
+          }
+        } else {
+          // First run - show consolidated weather info
+          const dateList = latestWeatherForecasts.map(f => f.date).join(', ');
+          console.log(`  Weather for ${latestWeatherForecasts.length} date(s): ${dateList}`);
+          for (const forecast of latestWeatherForecasts) {
+            if (forecast) {
+              const date = safeString(forecast.date, 'Unknown date');
+              const maxTemp = safeNumber(forecast.maxTemperature, 0);
+              const minTemp = safeNumber(forecast.minTemperature, 0);
+              console.log(`    ${date}: max ${maxTemp}°C, min ${minTemp}°C`);
+            }
+          }
         }
+      } else {
+        const dateList = marketDates.map(d => d.toISOString().split('T')[0]).join(', ');
+        console.log(`  Weather for ${marketDates.length} date(s) unchanged (${dateList})`);
       }
     }
 
-    // Convert markets to snapshots, filtering out null results
+    // --- Market Odds Analysis ---
+    // Convert markets to snapshots using current weather forecasts
     const marketSnapshots = safeArray(markets)
       .map(m => marketToSnapshot(m, latestWeatherForecasts))
       .filter((s): s is MarketSnapshot => s !== null);
 
+    // Show full market questions only on initial run or if count changed
+    const marketCountChanged = markets.length !== previousMarketCount;
+    if (isInitialRun || marketCountChanged) {
+      if (marketCountChanged && !isInitialRun) {
+        console.log(`  Market count changed: ${previousMarketCount} → ${markets.length}`);
+      }
+      console.log(`  ${markets.length} market(s):`);
+      marketSnapshots.forEach((snapshot, index) => {
+        console.log(`    ${index + 1}. ${snapshot.question}`);
+      });
+      console.log('');
+    }
+    previousMarketCount = markets.length;
+
+    // Always show the probability/edge table (compact format)
+    marketSnapshots.forEach((snapshot, index) => {
+      // Format market price
+      const marketPct = snapshot.yesPrice !== null
+        ? (snapshot.yesPrice * 100).toFixed(1) + '%'
+        : 'N/A';
+
+      // Format model probability
+      const modelPct = snapshot.modelProbability !== null
+        ? (snapshot.modelProbability * 100).toFixed(1) + '%'
+        : 'N/A';
+
+      // Format edge (only show if significant > 5%)
+      let edgeStr = '';
+      if (snapshot.edge !== null && Math.abs(snapshot.edge) > 0.05) {
+        const edgeSign = snapshot.edge >= 0 ? '+' : '';
+        edgeStr = ` Edge:${edgeSign}${(snapshot.edge * 100).toFixed(1)}%`;
+      }
+
+      // Format signal
+      const signalStr = snapshot.signal && snapshot.signal !== 'HOLD' ? ` [${snapshot.signal}]` : '';
+
+      // Extract short temp label from question (e.g., "8°C" from "Will the highest recorded temperature...")
+      const tempMatch = snapshot.question.match(/(\d+(?:\.\d+)?)\s*[°º]?\s*C/i);
+      const tempLabel = tempMatch ? `${tempMatch[1]}°C` : `#${index + 1}`;
+
+      console.log(`  ${tempLabel}: Mkt ${marketPct} | Model ${modelPct}${edgeStr}${signalStr}`);
+    });
+
+    // Process position management (create positions, check DECIDED_95, close positions)
+    processPositionManagement(marketSnapshots);
+
+    // Run settlement check using the same market data
+    await runSettlementPass(marketSnapshots);
+
+    // Log entry with current weather forecasts and markets
     const entry: MonitoringEntry = {
       timestamp: new Date().toISOString(),
-      entryType: 'weather_check',
+      entryType: 'combined',
       weatherForecast: latestWeatherForecasts[0] ?? null,
-      weatherForecasts: latestWeatherForecasts,
+      weatherForecasts: safeArray(latestWeatherForecasts),
       markets: marketSnapshots,
     };
 
     appendToLog(entry);
 
   } catch (error) {
-    console.error(`  Error fetching weather forecast: ${formatError(error)}`);
+    console.error(`  Error in scheduled check: ${formatError(error)}`);
   }
 }
 
@@ -454,7 +426,7 @@ async function startMonitoring(): Promise<void> {
   console.log('POLYMARKET WEATHER MONITORING');
   console.log('='.repeat(60));
   console.log(`Started at: ${formatTimestamp()}`);
-  console.log(`Market & settlement checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
+  console.log(`Scheduled checks every 10 minutes at :${MARKET_CHECK_MINUTES.join(', :')} past the hour`);
   console.log(`Log file: ${getLogFilePath()}`);
   console.log(`Settlement log: ${getSettlementLogFilePath()}`);
   console.log(`Positions file: ${getPositionsFilePath()}`);
@@ -478,36 +450,26 @@ async function startMonitoring(): Promise<void> {
     console.log('Continuing with monitoring only (no trading capabilities)...');
   }
 
-  // Initial data collection - fetch both weather and markets
+  // Initial data collection - fetch markets and weather together
   console.log('\n--- Initial Data Collection ---');
   try {
-    await checkWeatherForecast(true); // true = initial run, show full details
+    await runScheduledCheck(true); // true = initial run, show full details
   } catch (error) {
-    console.error(`Initial weather check failed: ${formatError(error)}`);
+    console.error(`Initial check failed: ${formatError(error)}`);
   }
 
-  // Also do an explicit odds check on startup (includes settlement pass)
-  try {
-    await checkMarketOdds(true); // true = initial run, show full market list
-  } catch (error) {
-    console.error(`Initial market check failed: ${formatError(error)}`);
-  }
-
-  // Set up clock-aligned scheduling (settlement is integrated into market checks)
+  // Set up clock-aligned scheduling (single scheduler for combined check)
   console.log('\n--- Monitoring Loop ---');
-  const marketScheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => checkMarketOdds(false), 'market & settlement check');
-  const weatherScheduler = new ClockAlignedScheduler(WEATHER_CHECK_MINUTES, () => checkWeatherForecast(false), 'weather check');
+  const scheduler = new ClockAlignedScheduler(MARKET_CHECK_MINUTES, () => runScheduledCheck(false), 'scheduled check');
 
-  marketScheduler.start();
-  weatherScheduler.start();
+  scheduler.start();
 
   console.log('Monitoring started. Press Ctrl+C to stop.');
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {
     console.log('\n\nShutting down monitoring...');
-    marketScheduler.stop();
-    weatherScheduler.stop();
+    scheduler.stop();
     console.log(`Final log file: ${getLogFilePath()}`);
     console.log(`Settlement log: ${getSettlementLogFilePath()}`);
     console.log('Goodbye!');
@@ -516,8 +478,7 @@ async function startMonitoring(): Promise<void> {
 
   process.on('SIGTERM', () => {
     console.log('\n\nReceived SIGTERM, shutting down...');
-    marketScheduler.stop();
-    weatherScheduler.stop();
+    scheduler.stop();
     process.exit(0);
   });
 }
