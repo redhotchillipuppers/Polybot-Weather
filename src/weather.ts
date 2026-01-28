@@ -1,10 +1,7 @@
 // OpenWeather API integration
 import type { WeatherForecast } from './types.js';
 import { fetchWithRetry, formatError, safeArray, safeNumber, safeString } from './api-utils.js';
-
-const LONDON_LAT = 51.5074;
-const LONDON_LON = -0.1278;
-const FORECAST_ENDPOINT = 'https://api.openweathermap.org/data/2.5/forecast';
+import { LONDON_LAT, LONDON_LON, OPENWEATHER_FORECAST_ENDPOINT } from './config/constants.js';
 
 interface OpenWeatherResponse {
   list: Array<{
@@ -22,7 +19,7 @@ interface OpenWeatherResponse {
 }
 
 export async function getLondonWeatherForecast(apiKey: string, targetDate?: Date): Promise<WeatherForecast> {
-  const url = `${FORECAST_ENDPOINT}?lat=${LONDON_LAT}&lon=${LONDON_LON}&units=metric&appid=${apiKey}`;
+  const url = `${OPENWEATHER_FORECAST_ENDPOINT}?lat=${LONDON_LAT}&lon=${LONDON_LON}&units=metric&appid=${apiKey}`;
 
   try {
     const response = await fetchWithRetry(url, undefined, {

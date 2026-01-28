@@ -2,8 +2,7 @@
 
 import type { PolymarketMarket, MarketSnapshot } from './types.js';
 import { fetchWithRetry, formatError, safeArray, safeNumber, safeString, safeJsonParse } from './api-utils.js';
-
-const GAMMA_API_URL = 'https://gamma-api.polymarket.com';
+import { GAMMA_API_URL, MARKET_LOOKAHEAD_DAYS } from './config/constants.js';
 
 // Retry options for Polymarket API
 const POLYMARKET_RETRY_OPTIONS = {
@@ -12,7 +11,7 @@ const POLYMARKET_RETRY_OPTIONS = {
 };
 
 // Generate event slugs for upcoming days
-function generateUpcomingEventSlugs(daysAhead: number = 3): string[] {
+function generateUpcomingEventSlugs(daysAhead: number = MARKET_LOOKAHEAD_DAYS): string[] {
   const slugs: string[] = [];
   const months = ['january', 'february', 'march', 'april', 'may', 'june',
                   'july', 'august', 'september', 'october', 'november', 'december'];
@@ -79,7 +78,7 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
   try {
     // Try fetching specific event by slug (correct path from docs: /events/slug/{slug})
     // Generate slugs dynamically for today and next few days
-    const eventSlugs = generateUpcomingEventSlugs(3);
+    const eventSlugs = generateUpcomingEventSlugs(MARKET_LOOKAHEAD_DAYS);
 
     // Track summary stats for consolidated logging
     let eventsFound = 0;
@@ -187,9 +186,9 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
       }
     }
 
-    // Filter by date - markets closing in next 3 days
+    // Filter by date - markets closing in next N days
     const now = new Date();
-    const threeDaysFromNow = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const lookaheadDate = new Date(now.getTime() + MARKET_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
 
     const filteredMarkets = allMarkets.filter((market: any) => {
       const endDateStr = market?.endDateIso || market?.end_date_iso || market?.endDate;
@@ -197,7 +196,7 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
       try {
         const endDate = new Date(endDateStr);
-        return endDate >= now && endDate <= threeDaysFromNow;
+        return endDate >= now && endDate <= lookaheadDate;
       } catch {
         return false;
       }

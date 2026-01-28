@@ -33,6 +33,7 @@ declare module 'jstat' {
 }
 
 import jstat from 'jstat';
+import { EDGE_THRESHOLD } from './config/constants.js';
 
 /**
  * Forecast error standard deviation by time horizon (in degrees Celsius)
@@ -315,11 +316,11 @@ export function analyzeEdge(
   const edge = fairProbability - marketPrice;
   const edgePercent = marketPrice > 0 ? (edge / marketPrice) * 100 : 0;
 
-  // Determine signal based on edge magnitude (5% threshold)
+  // Determine signal based on edge magnitude
   let signal: 'BUY' | 'SELL' | 'HOLD';
-  if (edge > 0.05) {
+  if (edge > EDGE_THRESHOLD) {
     signal = 'BUY'; // Market underpricing - buy YES
-  } else if (edge < -0.05) {
+  } else if (edge < -EDGE_THRESHOLD) {
     signal = 'SELL'; // Market overpricing - buy NO / sell YES
   } else {
     signal = 'HOLD'; // Edge too small to trade
