@@ -3,7 +3,14 @@ POLYBOT-WEATHER REFACTORING TODO LIST
 ================================================================================
 
 Generated: 2026-01-27
+Last reviewed: 2026-01-28
 Based on: Code review of entire codebase
+
+Progress Summary:
+  HIGH PRIORITY:    3/4 complete (75%)
+  MEDIUM PRIORITY:  0/4 complete (0%)
+  LOW PRIORITY:     1/4 complete (25%)
+  OVERALL:          4/12 complete (33%)
 
 ================================================================================
 HIGH PRIORITY
@@ -125,11 +132,13 @@ LOW PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 10. Move SettlementEntry interface to types.ts
+[x] 10. Move SettlementEntry interface to types.ts
 
-    The SettlementEntry interface is defined inline in monitor-markets.ts
-    (lines 407-417). Move it to types.ts with other shared interfaces
-    for consistency.
+    COMPLETED: The SettlementEntry interface has been moved from
+    monitor-markets.ts to src/persistence/file-store.ts (line 48).
+    This is a sensible location since it's closely related to the
+    file persistence functionality. It's exported and imported by
+    settlement.ts as needed.
 
 --------------------------------------------------------------------------------
 
