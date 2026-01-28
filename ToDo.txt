@@ -8,9 +8,9 @@ Based on: Code review of entire codebase
 
 Progress Summary:
   HIGH PRIORITY:    3/4 complete (75%)
-  MEDIUM PRIORITY:  1/4 complete (25%)
+  MEDIUM PRIORITY:  2/4 complete (50%)
   LOW PRIORITY:     1/4 complete (25%)
-  OVERALL:          5/12 complete (42%)
+  OVERALL:          6/12 complete (50%)
 
 ================================================================================
 HIGH PRIORITY
@@ -116,13 +116,12 @@ MEDIUM PRIORITY
 
 --------------------------------------------------------------------------------
 
-[ ] 8. Clean up deprecated code
+[x] 8. Clean up deprecated code
 
-    Remove the deprecated weatherForecast field from MonitoringEntry:
-      weatherForecast: WeatherForecast | null;  // Deprecated
-
-    It's been replaced by weatherForecasts array. Update any code that
-    still references it and remove the field.
+    COMPLETED: Removed the deprecated weatherForecast field from MonitoringEntry
+    in src/persistence/file-store.ts. The field was defined at line 42 and was
+    also being populated in the readLogFile() function at line 221. Both have
+    been removed. The codebase now uses only the weatherForecasts array.
 
 ================================================================================
 LOW PRIORITY

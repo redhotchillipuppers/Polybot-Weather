@@ -39,7 +39,6 @@ export const DAILY_REPORTS_FILE_PATH = getDailyReportsPath();
 export interface MonitoringEntry {
   timestamp: string;
   entryType: 'market_check' | 'weather_check' | 'combined';
-  weatherForecast: WeatherForecast | null;  // Deprecated: kept for backwards compatibility
   weatherForecasts: WeatherForecast[];       // Weather forecasts matching market dates
   markets: MarketSnapshot[];
 }
@@ -218,7 +217,6 @@ export function readLogFile(): MonitoringEntry[] {
     entries.push({
       timestamp: snapshot.timestamp,
       entryType: snapshot.entryType === 'market_check' ? 'combined' : snapshot.entryType,
-      weatherForecast: snapshot.weatherForecasts[0] ?? null,
       weatherForecasts: snapshot.weatherForecasts,
       markets,
     });
