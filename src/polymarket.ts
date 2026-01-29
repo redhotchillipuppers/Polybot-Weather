@@ -186,9 +186,12 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
       }
     }
 
-    // Filter by date - markets closing in next N days
+    // Filter by date - markets for today through next N days (using calendar day comparison)
     const now = new Date();
-    const lookaheadDate = new Date(now.getTime() + MARKET_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+    // Get start of today (midnight UTC) for calendar day comparison
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    // Lookahead: include markets up to N days from today
+    const lookaheadEnd = new Date(todayStart.getTime() + (MARKET_LOOKAHEAD_DAYS + 1) * 24 * 60 * 60 * 1000);
 
     const filteredMarkets = allMarkets.filter((market: any) => {
       const endDateStr = market?.endDateIso || market?.end_date_iso || market?.endDate;
@@ -196,7 +199,10 @@ export async function queryLondonTemperatureMarkets(): Promise<PolymarketMarket[
 
       try {
         const endDate = new Date(endDateStr);
-        return endDate >= now && endDate <= lookaheadDate;
+        // Get start of endDate's calendar day (midnight UTC) for day-level comparison
+        const endDateDay = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()));
+        // Include markets whose calendar day is today or within lookahead window
+        return endDateDay >= todayStart && endDateDay < lookaheadEnd;
       } catch {
         return false;
       }
