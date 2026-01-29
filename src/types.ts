@@ -30,6 +30,7 @@ export interface MarketSnapshot {
   outcomes: string[];
   prices: number[];
   yesPrice: number | null;
+  noPrice: number | null;
   endDate: string;
   minutesToClose: number | null;
   volume: number;
@@ -76,6 +77,8 @@ export interface Position {
   size: number;           // Use 1 for now
   entryYesPrice: number;
   entryNoPrice: number;
+  entryStrikeTempC: number | null;
+  entryBracketType: ParsedMarketQuestion['bracketType'] | null;
   openedAt: string;       // ISO timestamp
   // Model inputs at execution time (for post-mortems)
   modelProbability: number | null;
@@ -84,7 +87,7 @@ export interface Position {
   closedAt: string | null;
   exitYesPrice: number | null;
   exitNoPrice: number | null;
-  closeReason: 'DECIDED_95' | 'OFFICIAL_SETTLEMENT' | null;
+  closeReason: 'DECIDED_95' | 'OFFICIAL_SETTLEMENT' | 'STOP_PROXIMITY' | 'STOP_EDGE_FLIP' | null;
   realizedPnl: number | null;
   // Correlation IDs for tracing back to logs
   snapshotId?: string | undefined;    // Reference to MonitoringSnapshot that led to this position
@@ -94,14 +97,55 @@ export interface Position {
 export interface DecidedDateInfo {
   streakCount: number;
   decidedAt: string | null;
+  decided95At?: string | null;
   triggerMarketId: string | null;
   triggerQuestion: string | null;
   triggerYesPrice: number | null;
+  triggerSide: 'YES' | 'NO' | null;
+  triggerNoPrice?: number | null;
+}
+
+export interface CandidateState {
+  bestCandidateKey: string | null;
+  bestScore: number | null;
+  bestStreakCount: number;
+  bestSince: string | null;
+}
+
+export interface CandidateSelection {
+  dateKey: string;
+  marketId: string;
+  question: string;
+  side: 'YES' | 'NO';
+  strikeTempC: number;
+  bracketType: ParsedMarketQuestion['bracketType'];
+  yesPrice: number | null;
+  noPrice: number | null;
+  modelTempC: number;
+  modelProbability: number | null;
+  marketImpliedProb: number | null;
+  edge: number;
+  proximityAbsC: number;
+  score: number;
+  computedAt: string;
+}
+
+export interface StopExitInfo {
+  dateKey: string;
+  marketId: string;
+  closeReason: 'STOP_PROXIMITY' | 'STOP_EDGE_FLIP';
+  modelTempC: number;
+  proximityAbsC: number;
+  edgeNow: number;
+  yesPrice: number | null;
+  noPrice: number | null;
 }
 
 export interface PositionsFile {
   positions: { [marketId: string]: Position };
   decidedDates: { [dateKey: string]: DecidedDateInfo };
+  candidateState: { [dateKey: string]: CandidateState };
+  stoppedOutDates: { [dateKey: string]: boolean };
   reportedDates: string[];  // Array of dateKeys already reported
 }
 
@@ -145,6 +189,7 @@ export interface MarketObservation {
   outcomes: string[];
   prices: number[];
   yesPrice: number | null;
+  noPrice: number | null;
   endDate: string;
   minutesToClose: number | null;
   volume: number;
@@ -159,6 +204,8 @@ export interface MonitoringSnapshot {
   entryType: 'market_check' | 'weather_check';
   weatherForecasts: WeatherForecast[];
   markets: MarketObservation[];
+  modelTempsByDate: { [dateKey: string]: number };
+  bestCandidatesByDate: CandidateSelection[];
 }
 
 // Skip reasons for decision gating
@@ -180,10 +227,29 @@ export interface MarketDecision {
   skipReason?: SkipReason;      // Reason for forcing HOLD (if any)
 }
 
+export interface DecisionActionRecord {
+  dateKey: string;
+  action: 'EXECUTED_ENTRY' | 'BLOCKED_LOCK' | 'HOLD' | 'STOP_EXIT';
+  selectedBestCandidate: CandidateSelection | null;
+  bestStreakCount: number;
+  confirmCycles: number;
+  stopReason?: 'STOP_PROXIMITY' | 'STOP_EDGE_FLIP';
+  stopDetails?: {
+    modelTempC: number | null;
+    proximityAbsC: number | null;
+    edgeNow: number | null;
+    yesPrice?: number | null;
+    noPrice?: number | null;
+  };
+  skipReason?: SkipReason;
+}
+
 // Decision record (model outputs and signals)
 export interface DecisionRecord {
   decisionId: string;           // UUID for correlation
   snapshotId: string;           // Reference to monitoring snapshot
   timestamp: string;            // ISO timestamp
   decisions: MarketDecision[];
+  bestCandidatesByDate: CandidateSelection[];
+  actions: DecisionActionRecord[];
 }

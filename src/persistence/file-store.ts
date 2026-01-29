@@ -1,6 +1,18 @@
 // File persistence utilities for monitoring, settlement, and position data
 
-import type { WeatherForecast, MarketSnapshot, PositionsFile, EarlyCloseReport, MonitoringSnapshot, DecisionRecord, MarketObservation, MarketDecision, SkipReason } from '../types.js';
+import type {
+  WeatherForecast,
+  MarketSnapshot,
+  PositionsFile,
+  EarlyCloseReport,
+  MonitoringSnapshot,
+  DecisionRecord,
+  MarketObservation,
+  MarketDecision,
+  SkipReason,
+  CandidateSelection,
+  DecisionActionRecord,
+} from '../types.js';
 import type { LadderStats } from '../ladder-coherence.js';
 import {
   initializeLogDirectories,
@@ -81,6 +93,7 @@ export function toMarketObservation(snapshot: MarketSnapshot): MarketObservation
     outcomes: snapshot.outcomes,
     prices: snapshot.prices,
     yesPrice: snapshot.yesPrice,
+    noPrice: snapshot.noPrice,
     endDate: snapshot.endDate,
     minutesToClose: snapshot.minutesToClose,
     volume: snapshot.volume,
@@ -137,7 +150,9 @@ export function toMarketDecision(
  */
 export function appendMonitoringSnapshot(
   weatherForecasts: WeatherForecast[],
-  markets: MarketSnapshot[]
+  markets: MarketSnapshot[],
+  modelTempsByDate: { [dateKey: string]: number } = {},
+  bestCandidatesByDate: CandidateSelection[] = []
 ): string {
   const snapshotId = generateId();
   const snapshot: MonitoringSnapshot = {
@@ -146,6 +161,8 @@ export function appendMonitoringSnapshot(
     entryType: 'market_check',
     weatherForecasts,
     markets: markets.map(toMarketObservation),
+    modelTempsByDate,
+    bestCandidatesByDate,
   };
 
   appendJsonl(getMonitoringLogPath(), snapshot);
@@ -161,9 +178,14 @@ export function appendDecisionRecord(
   snapshotId: string,
   markets: MarketSnapshot[],
   dateKeyExtractor: (endDate: string) => string | null,
-  ladderStats?: Map<string, LadderStats>
+  ladderStats?: Map<string, LadderStats>,
+  options?: {
+    bestCandidatesByDate?: CandidateSelection[];
+    actions?: DecisionActionRecord[];
+    decisionId?: string;
+  }
 ): string {
-  const decisionId = generateId();
+  const decisionId = options?.decisionId ?? generateId();
   const decisions: MarketDecision[] = [];
 
   for (const market of markets) {
@@ -186,6 +208,8 @@ export function appendDecisionRecord(
     snapshotId,
     timestamp: new Date().toISOString(),
     decisions,
+    bestCandidatesByDate: options?.bestCandidatesByDate ?? [],
+    actions: options?.actions ?? [],
   };
 
   appendJsonl(getDecisionsLogPath(), record);
@@ -243,6 +267,7 @@ export function readLogFile(): MonitoringEntry[] {
         entrySide: marketDecision?.entrySide ?? null,
         entryYesPrice: marketDecision?.entryYesPrice ?? null,
         entryNoPrice: marketDecision?.entryNoPrice ?? null,
+        noPrice: obs.noPrice ?? null,
         resolvedOutcome: null,
         tradePnl: null,
       };
@@ -299,6 +324,8 @@ export function getEmptyPositionsFile(): PositionsFile {
   return {
     positions: {},
     decidedDates: {},
+    candidateState: {},
+    stoppedOutDates: {},
     reportedDates: [],
   };
 }
@@ -307,9 +334,37 @@ export function getEmptyPositionsFile(): PositionsFile {
 export function loadPositionsFile(): PositionsFile {
   const data = readJson<PositionsFile | null>(getPositionsPath(), null);
   if (data && typeof data === 'object') {
+    const decidedDates = data.decidedDates || {};
+    const normalizedDecidedDates: PositionsFile['decidedDates'] = {};
+    for (const [dateKey, info] of Object.entries(decidedDates)) {
+      normalizedDecidedDates[dateKey] = {
+        streakCount: info?.streakCount ?? 0,
+        decidedAt: info?.decidedAt ?? null,
+        decided95At: info?.decided95At ?? null,
+        triggerMarketId: info?.triggerMarketId ?? null,
+        triggerQuestion: info?.triggerQuestion ?? null,
+        triggerYesPrice: info?.triggerYesPrice ?? null,
+        triggerSide: info?.triggerSide ?? null,
+        triggerNoPrice: info?.triggerNoPrice ?? null,
+      };
+    }
+
+    const candidateState = data.candidateState || {};
+    const normalizedCandidateState: PositionsFile['candidateState'] = {};
+    for (const [dateKey, info] of Object.entries(candidateState)) {
+      normalizedCandidateState[dateKey] = {
+        bestCandidateKey: info?.bestCandidateKey ?? null,
+        bestScore: info?.bestScore ?? null,
+        bestStreakCount: info?.bestStreakCount ?? 0,
+        bestSince: info?.bestSince ?? null,
+      };
+    }
+
     return {
       positions: data.positions || {},
-      decidedDates: data.decidedDates || {},
+      decidedDates: normalizedDecidedDates,
+      candidateState: normalizedCandidateState,
+      stoppedOutDates: data.stoppedOutDates || {},
       reportedDates: Array.isArray(data.reportedDates) ? data.reportedDates : [],
     };
   }

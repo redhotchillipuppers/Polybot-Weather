@@ -3,7 +3,14 @@ import { Wallet } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { getWeatherForDatesMulti } from './weather.js';
 import { queryLondonTemperatureMarkets } from './polymarket.js';
-import type { WeatherForecast, PolymarketMarket, MarketSnapshot } from './types.js';
+import type {
+  WeatherForecast,
+  PolymarketMarket,
+  MarketSnapshot,
+  CandidateSelection,
+  CandidateState,
+  DecisionActionRecord,
+} from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
 import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge } from './probability-model.js';
 
@@ -20,7 +27,15 @@ import {
 import { computeLadderCoherence, type LadderStats } from './ladder-coherence.js';
 import { getDecisionsLogPath } from './persistence/log-utils.js';
 import { loadSettledMarketIds, getSettledMarketCount, runSettlementPass, formatTimestamp } from './settlement/settlement.js';
-import { processPositionManagement, loadPositionsData, getPositionsFilePath, getDailyReportsFilePath } from './positions/position-manager.js';
+import {
+  processPositionManagement,
+  loadPositionsData,
+  getPositionsFilePath,
+  getDailyReportsFilePath,
+  canEnter,
+  updateCandidateState,
+  recordEntry,
+} from './positions/position-manager.js';
 import { getEnvConfig } from './config/env.js';
 import {
   HOST,
@@ -30,7 +45,11 @@ import {
   MIN_TRADE_VOLUME,
   DEFAULT_PRICE_EPSILON,
   DEFAULT_PRICE_PAIRS,
+  CONFIRM_CYCLES,
+  ENTRY_MAX_PROXIMITY_C,
+  ENTRY_MIN_EDGE,
 } from './config/constants.js';
+import { extractDateKeyFromEndDate } from './positions/decided-95.js';
 
 // Validate environment variables at startup (exits with clear error if missing)
 const { PRIVATE_KEY, OPENWEATHER_API_KEY, TOMORROW_API_KEY } = getEnvConfig();
@@ -218,6 +237,7 @@ function marketToSnapshot(
       outcomes: outcomes.map(o => safeString(o, 'Unknown')),
       prices,
       yesPrice,
+      noPrice,
       endDate: endDateStr,
       minutesToClose,
       volume,
@@ -314,6 +334,111 @@ function getTemperatureChanges(
   }
 
   return changes;
+}
+
+type CandidateSide = 'YES' | 'NO';
+
+function buildCandidatePool(
+  marketSnapshots: MarketSnapshot[],
+  weatherForecasts: WeatherForecast[]
+): {
+  candidatesByDate: Map<string, CandidateSelection[]>;
+  bestCandidatesByDate: Map<string, CandidateSelection>;
+  modelTempsByDate: { [dateKey: string]: number };
+} {
+  const candidatesByDate = new Map<string, CandidateSelection[]>();
+  const modelTempsByDate: { [dateKey: string]: number } = {};
+
+  for (const forecast of weatherForecasts) {
+    modelTempsByDate[forecast.date] = forecast.maxTemperature;
+  }
+
+  const computedAt = new Date().toISOString();
+
+  for (const snapshot of marketSnapshots) {
+    if (!snapshot.isTradeable) continue;
+    const hasLiquidityMetric = Number.isFinite(snapshot.liquidity);
+    const meetsLiquidity = hasLiquidityMetric ? snapshot.liquidity >= MIN_TRADE_LIQUIDITY : true;
+    if (!meetsLiquidity) continue;
+    // TODO: enforce MIN_TRADE_LIQUIDITY when liquidity data is unavailable.
+
+    const parsedQuestion = parseMarketQuestion(snapshot.question);
+    if (!parsedQuestion) continue;
+
+    const dateKey = extractDateKeyFromEndDate(snapshot.endDate);
+    if (!dateKey) continue;
+
+    const modelTempC = modelTempsByDate[dateKey];
+    if (modelTempC === undefined || !Number.isFinite(modelTempC)) continue;
+
+    const modelProbability = snapshot.modelProbability;
+    if (modelProbability === null) continue;
+
+    const yesPrice = snapshot.yesPrice;
+    const noPrice = snapshot.noPrice;
+    if (yesPrice === null || noPrice === null) continue;
+
+    const strikeTempC = parsedQuestion.bracketValue;
+    const proximityAbsC = Math.abs(modelTempC - strikeTempC);
+
+    const candidates: Array<{ side: CandidateSide; edge: number; marketImpliedProb: number }> = [
+      {
+        side: 'YES',
+        edge: modelProbability - yesPrice,
+        marketImpliedProb: yesPrice,
+      },
+      {
+        side: 'NO',
+        edge: (1 - modelProbability) - noPrice,
+        marketImpliedProb: noPrice,
+      },
+    ];
+
+    for (const candidateInfo of candidates) {
+      if (proximityAbsC > ENTRY_MAX_PROXIMITY_C) continue;
+      if (candidateInfo.edge < ENTRY_MIN_EDGE) continue;
+
+      const candidate: CandidateSelection = {
+        dateKey,
+        marketId: snapshot.marketId,
+        question: snapshot.question,
+        side: candidateInfo.side,
+        strikeTempC,
+        bracketType: parsedQuestion.bracketType,
+        yesPrice,
+        noPrice,
+        modelTempC,
+        modelProbability,
+        marketImpliedProb: candidateInfo.marketImpliedProb,
+        edge: candidateInfo.edge,
+        proximityAbsC,
+        score: candidateInfo.edge,
+        computedAt,
+      };
+
+      const existing = candidatesByDate.get(dateKey) ?? [];
+      existing.push(candidate);
+      candidatesByDate.set(dateKey, existing);
+    }
+  }
+
+  const bestCandidatesByDate = new Map<string, CandidateSelection>();
+  for (const [dateKey, candidates] of candidatesByDate) {
+    const bestCandidate = [...candidates].sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      if (a.proximityAbsC !== b.proximityAbsC) {
+        return a.proximityAbsC - b.proximityAbsC;
+      }
+      return a.marketId.localeCompare(b.marketId);
+    })[0];
+    if (bestCandidate) {
+      bestCandidatesByDate.set(dateKey, bestCandidate);
+    }
+  }
+
+  return { candidatesByDate, bestCandidatesByDate, modelTempsByDate };
 }
 
 // Combined market and weather check (runs every 10 minutes)
@@ -457,10 +582,103 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
       }
     }
 
+    const { bestCandidatesByDate, modelTempsByDate } = buildCandidatePool(
+      marketSnapshots,
+      safeArray(latestWeatherForecasts)
+    );
+
+    // Process thesis stop-losses and DECIDED_95 before new entries
+    const stopExits = processPositionManagement(
+      marketSnapshots,
+      safeArray(latestWeatherForecasts),
+      ladderStats
+    );
+
+    const actionByDate = new Map<string, DecisionActionRecord>();
+    const candidateStateByDate = new Map<string, CandidateState>();
+    const entriesToExecute: CandidateSelection[] = [];
+    const dateKeys = new Set<string>(Object.keys(modelTempsByDate));
+
+    for (const dateKey of bestCandidatesByDate.keys()) {
+      dateKeys.add(dateKey);
+    }
+    for (const stopExit of stopExits) {
+      dateKeys.add(stopExit.dateKey);
+    }
+
+    const sortedDateKeys = Array.from(dateKeys).sort();
+    for (const dateKey of sortedDateKeys) {
+      const bestCandidate = bestCandidatesByDate.get(dateKey) ?? null;
+      const candidateKey = bestCandidate ? `${bestCandidate.marketId}:${bestCandidate.side}` : null;
+      const candidateScore = bestCandidate?.score ?? null;
+      const candidateState = updateCandidateState(dateKey, candidateKey, candidateScore);
+      candidateStateByDate.set(dateKey, candidateState);
+
+      const ladderCoherent = ladderStats.get(dateKey)?.ladderCoherent ?? true;
+
+      let action: DecisionActionRecord['action'] = 'HOLD';
+      let skipReason: DecisionActionRecord['skipReason'] = undefined;
+
+      if (bestCandidate && candidateState.bestStreakCount >= CONFIRM_CYCLES) {
+        if (!ladderCoherent) {
+          action = 'HOLD';
+          skipReason = 'LADDER_INCOHERENT';
+        } else if (canEnter(dateKey)) {
+          action = 'EXECUTED_ENTRY';
+          entriesToExecute.push(bestCandidate);
+        } else {
+          action = 'BLOCKED_LOCK';
+        }
+      }
+
+      const actionRecord: DecisionActionRecord = {
+        dateKey,
+        action,
+        selectedBestCandidate: bestCandidate,
+        bestStreakCount: candidateState.bestStreakCount,
+        confirmCycles: CONFIRM_CYCLES,
+      };
+
+      if (skipReason) {
+        actionRecord.skipReason = skipReason;
+      }
+
+      actionByDate.set(dateKey, actionRecord);
+    }
+
+    for (const stopExit of stopExits) {
+      const candidateState = candidateStateByDate.get(stopExit.dateKey);
+      actionByDate.set(stopExit.dateKey, {
+        dateKey: stopExit.dateKey,
+        action: 'STOP_EXIT',
+        selectedBestCandidate: bestCandidatesByDate.get(stopExit.dateKey) ?? null,
+        bestStreakCount: candidateState?.bestStreakCount ?? 0,
+        confirmCycles: CONFIRM_CYCLES,
+        stopReason: stopExit.closeReason,
+        stopDetails: {
+          modelTempC: stopExit.modelTempC,
+          proximityAbsC: stopExit.proximityAbsC,
+          edgeNow: stopExit.edgeNow,
+          yesPrice: stopExit.yesPrice,
+          noPrice: stopExit.noPrice,
+        },
+      });
+    }
+
+    const bestCandidatesArray = Array.from(bestCandidatesByDate.values()).sort((a, b) =>
+      a.dateKey.localeCompare(b.dateKey)
+    );
+
     // Log monitoring snapshot (raw observation data) - returns snapshotId for correlation
     const snapshotId = appendMonitoringSnapshot(
       safeArray(latestWeatherForecasts),
-      marketSnapshots
+      marketSnapshots,
+      modelTempsByDate,
+      bestCandidatesArray
+    );
+
+    const actionRecords = Array.from(actionByDate.values()).sort((a, b) =>
+      a.dateKey.localeCompare(b.dateKey)
     );
 
     // Log decision record (model outputs) - returns decisionId for correlation
@@ -475,12 +693,16 @@ async function runScheduledCheck(isInitialRun: boolean = false): Promise<void> {
           return null;
         }
       },
-      ladderStats
+      ladderStats,
+      {
+        bestCandidatesByDate: bestCandidatesArray,
+        actions: actionRecords,
+      }
     );
 
-    // Process position management (create positions, check DECIDED_95, close positions)
-    // Pass correlation IDs for tracing and ladder stats for gating
-    processPositionManagement(marketSnapshots, snapshotId, decisionId, ladderStats);
+    for (const entryCandidate of entriesToExecute) {
+      recordEntry(entryCandidate.dateKey, entryCandidate, snapshotId, decisionId);
+    }
 
     // Run settlement check using the same market data
     await runSettlementPass(marketSnapshots);
