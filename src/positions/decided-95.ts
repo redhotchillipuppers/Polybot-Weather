@@ -77,9 +77,12 @@ export function checkDecided95(
       dateInfo = {
         streakCount: 0,
         decidedAt: null,
+        decided95At: null,
         triggerMarketId: null,
         triggerQuestion: null,
         triggerYesPrice: null,
+        triggerSide: null,
+        triggerNoPrice: null,
       };
       positionsData.decidedDates[dateKey] = dateInfo;
     }
@@ -90,9 +93,9 @@ export function checkDecided95(
       dateInfo.streakCount += 1;
 
       // Check if streak requirement met (and not already decided)
-      if (dateInfo.streakCount >= DECIDED_95_STREAK_REQUIRED && dateInfo.decidedAt === null) {
+      if (dateInfo.streakCount >= DECIDED_95_STREAK_REQUIRED && (dateInfo.decided95At ?? null) === null) {
         // Mark as decided
-        dateInfo.decidedAt = now;
+        dateInfo.decided95At = now;
         dateInfo.triggerMarketId = triggerMarket.marketId;
         dateInfo.triggerQuestion = triggerMarket.question;
         dateInfo.triggerYesPrice = maxYesPrice;

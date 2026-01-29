@@ -140,6 +140,7 @@ function createMockSnapshot(overrides: Partial<MarketSnapshot>): MarketSnapshot 
     outcomes: ['Yes', 'No'],
     prices: [0.95, 0.05],
     yesPrice: 0.95,
+    noPrice: 0.05,
     endDate: '2026-01-28T23:59:00.000Z',
     minutesToClose: 60,
     volume: 1000,
@@ -165,6 +166,8 @@ function createFreshPositionsData(): PositionsFile {
   return {
     positions: {},
     decidedDates: {},
+    candidateState: {},
+    stoppedOutDates: {},
     reportedDates: [],
   };
 }
@@ -195,6 +198,8 @@ function createFreshPositionsData(): PositionsFile {
     triggerMarketId: null,
     triggerQuestion: null,
     triggerYesPrice: null,
+    triggerSide: null,
+    triggerNoPrice: null,
   };
   let saveCount = 0;
   const savePositionsFile = () => { saveCount++; };
@@ -220,6 +225,8 @@ function createFreshPositionsData(): PositionsFile {
     triggerMarketId: null,
     triggerQuestion: null,
     triggerYesPrice: null,
+    triggerSide: null,
+    triggerNoPrice: null,
   };
   const savePositionsFile = () => {};
 
@@ -275,6 +282,8 @@ function createFreshPositionsData(): PositionsFile {
     triggerMarketId: null,
     triggerQuestion: null,
     triggerYesPrice: null,
+    triggerSide: null,
+    triggerNoPrice: null,
   };
   const savePositionsFile = () => {};
 
@@ -296,6 +305,8 @@ function createFreshPositionsData(): PositionsFile {
     triggerMarketId: null,
     triggerQuestion: null,
     triggerYesPrice: null,
+    triggerSide: null,
+    triggerNoPrice: null,
   };
   const savePositionsFile = () => {};
 

@@ -57,6 +57,21 @@ export const DECIDED_95_STREAK_REQUIRED = 2;
 /** Minimum edge threshold for trade signals (5%) */
 export const EDGE_THRESHOLD = 0.05;
 
+/** Number of consecutive cycles a candidate must remain best before entry */
+export const CONFIRM_CYCLES = 3;
+
+/** Max absolute distance between model temp and strike temp for entry */
+export const ENTRY_MAX_PROXIMITY_C = 0.7;
+
+/** Minimum positive edge required to enter a trade */
+export const ENTRY_MIN_EDGE = 0.04;
+
+/** Thesis stop: max absolute distance between model temp and entry strike temp */
+export const STOP_MAX_PROXIMITY_C = 1.0;
+
+/** Thesis stop: edge flip threshold (negative) */
+export const STOP_EDGE_FLIP = 0.02;
+
 /** Minimum market liquidity required before entering trades (USD) */
 export const MIN_TRADE_LIQUIDITY = 150;
 
