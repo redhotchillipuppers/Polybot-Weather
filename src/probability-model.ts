@@ -33,7 +33,7 @@ declare module 'jstat' {
 }
 
 import jstat from 'jstat';
-import { EDGE_THRESHOLD } from './config/constants.js';
+import { EDGE_THRESHOLD, TIME_COMPRESSION_REF_HOURS } from './config/constants.js';
 
 /**
  * Forecast error standard deviation by time horizon (in degrees Celsius)
@@ -220,6 +220,34 @@ export function calculateHoursUntilResolution(endDate: string): number {
 }
 
 /**
+ * Calculates time compression factor based on hours to settlement.
+ *
+ * As settlement approaches, forecast uncertainty collapses faster than market prices update.
+ * This creates exploitable edge, but only when time-compressed. Early entries bleed value
+ * waiting for convergence.
+ *
+ * The compression factor scales edge linearly with proximity to settlement:
+ * - At 24h out → 1.0 (full edge preserved)
+ * - At 48h out → 0.5 (half edge - trade with 15% raw edge behaves like 7.5%)
+ * - At 96h out → 0.25 (quarter edge)
+ * - Below 24h → capped at 1.0 (no bonus for being closer)
+ *
+ * @param hoursToSettlement - Hours from now until market settlement
+ * @returns Time compression factor between 0 and 1
+ *
+ * @example
+ * calculateTimeCompression(24);  // Returns 1.0
+ * calculateTimeCompression(48);  // Returns 0.5
+ * calculateTimeCompression(12);  // Returns 1.0 (capped)
+ */
+export function calculateTimeCompression(hoursToSettlement: number): number {
+  if (hoursToSettlement <= 0) {
+    return 1; // At or past settlement, use full edge
+  }
+  return Math.min(TIME_COMPRESSION_REF_HOURS / hoursToSettlement, 1);
+}
+
+/**
  * Convenience function to calculate probability for common market bracket types.
  *
  * Market questions typically follow patterns like:
@@ -300,39 +328,71 @@ export function calculateMarketProbability(
  * market's implied probability (price). A positive edge means the market is
  * underpricing the outcome relative to our model.
  *
+ * When hoursToSettlement is provided, time compression is applied to filter out
+ * early, weak trades. The effective edge is used for signal determination:
+ * - At 24h out → effectiveEdge = rawEdge * 1.0
+ * - At 48h out → effectiveEdge = rawEdge * 0.5 (15% raw edge → 7.5% effective)
+ * - At 96h out → effectiveEdge = rawEdge * 0.25
+ *
  * @param fairProbability - Our calculated probability (0-1)
  * @param marketPrice - The market price / implied probability (0-1)
- * @returns Object with edge analysis
+ * @param hoursToSettlement - Optional hours until market settlement for time compression
+ * @returns Object with edge analysis including effective edge when time compression applied
  *
  * @example
- * // Fair value is 0.30, market price is 0.25
- * analyzeEdge(0.30, 0.25);
- * // Returns { edge: 0.05, edgePercent: 20, signal: 'BUY' }
+ * // Fair value is 0.30, market price is 0.25, 48 hours out
+ * analyzeEdge(0.30, 0.25, 48);
+ * // Returns { edge: 0.05, effectiveEdge: 0.025, timeCompression: 0.5, signal: 'HOLD' }
  */
 export function analyzeEdge(
   fairProbability: number,
-  marketPrice: number
+  marketPrice: number,
+  hoursToSettlement?: number
 ): {
   edge: number;
   edgePercent: number;
   signal: 'BUY' | 'SELL' | 'HOLD';
+  effectiveEdge?: number;
+  timeCompression?: number;
 } {
   const edge = fairProbability - marketPrice;
   const edgePercent = marketPrice > 0 ? (edge / marketPrice) * 100 : 0;
 
-  // Determine signal based on edge magnitude
+  // Calculate time compression if hours provided
+  let effectiveEdge = edge;
+  let timeCompression: number | undefined;
+  if (hoursToSettlement !== undefined) {
+    timeCompression = calculateTimeCompression(hoursToSettlement);
+    effectiveEdge = edge * timeCompression;
+  }
+
+  // Determine signal based on effective edge magnitude (time-compressed)
   let signal: 'BUY' | 'SELL' | 'HOLD';
-  if (edge > EDGE_THRESHOLD) {
+  if (effectiveEdge > EDGE_THRESHOLD) {
     signal = 'BUY'; // Market underpricing - buy YES
-  } else if (edge < -EDGE_THRESHOLD) {
+  } else if (effectiveEdge < -EDGE_THRESHOLD) {
     signal = 'SELL'; // Market overpricing - buy NO / sell YES
   } else {
     signal = 'HOLD'; // Edge too small to trade
   }
 
-  return {
+  const result: {
+    edge: number;
+    edgePercent: number;
+    signal: 'BUY' | 'SELL' | 'HOLD';
+    effectiveEdge?: number;
+    timeCompression?: number;
+  } = {
     edge: Math.round(edge * 10000) / 10000, // Round to 4 decimal places
     edgePercent: Math.round(edgePercent * 100) / 100, // Round to 2 decimal places
     signal,
   };
+
+  // Include time compression info if it was applied
+  if (hoursToSettlement !== undefined) {
+    result.effectiveEdge = Math.round(effectiveEdge * 10000) / 10000;
+    result.timeCompression = Math.round(timeCompression! * 10000) / 10000;
+  }
+
+  return result;
 }
