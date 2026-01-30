@@ -17,7 +17,7 @@ import { checkDecided95, extractDateKeyFromEndDate } from './decided-95.js';
 import type { LadderStats } from '../ladder-coherence.js';
 import { parseMarketQuestion } from '../parsers/market-parser.js';
 import { calculateHoursUntilResolution, calculateMarketProbability } from '../probability-model.js';
-import { STOP_EDGE_FLIP, STOP_MAX_PROXIMITY_C } from '../config/constants.js';
+import { STOP_EDGE_FLIP, STOP_MAX_PROXIMITY_C, MAX_STOPOUTS_PER_DATE } from '../config/constants.js';
 
 // In-memory positions state
 let positionsData: PositionsFile = {
@@ -57,7 +57,8 @@ export function canEnter(dateKey: string): boolean {
   if (decidedInfo?.decidedAt) {
     return false;
   }
-  if (positionsData.stoppedOutDates[dateKey]) {
+  const stopoutCount = positionsData.stoppedOutDates[dateKey] ?? 0;
+  if (stopoutCount >= MAX_STOPOUTS_PER_DATE) {
     return false;
   }
   if (hasOpenPositionForDateKey(dateKey)) {
@@ -402,7 +403,8 @@ export function processPositionManagement(
     position.exitNoPrice = noPrice;
     position.closeReason = closeReason;
     position.realizedPnl = realizedPnl;
-    positionsData.stoppedOutDates[position.dateKey] = true;
+    const currentCount = positionsData.stoppedOutDates[position.dateKey] ?? 0;
+    positionsData.stoppedOutDates[position.dateKey] = currentCount + 1;
     positionsUpdated = true;
 
     stopExits.push({

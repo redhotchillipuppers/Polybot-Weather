@@ -360,11 +360,25 @@ export function loadPositionsFile(): PositionsFile {
       };
     }
 
+    // Normalize stoppedOutDates: convert legacy boolean values to numbers
+    const stoppedOutDates = data.stoppedOutDates || {};
+    const normalizedStoppedOutDates: PositionsFile['stoppedOutDates'] = {};
+    for (const [dateKey, value] of Object.entries(stoppedOutDates)) {
+      if (typeof value === 'boolean') {
+        // Legacy boolean: true means was locked, treat as max stopouts
+        normalizedStoppedOutDates[dateKey] = value ? 2 : 0;
+      } else if (typeof value === 'number') {
+        normalizedStoppedOutDates[dateKey] = value;
+      } else {
+        normalizedStoppedOutDates[dateKey] = 0;
+      }
+    }
+
     return {
       positions: data.positions || {},
       decidedDates: normalizedDecidedDates,
       candidateState: normalizedCandidateState,
-      stoppedOutDates: data.stoppedOutDates || {},
+      stoppedOutDates: normalizedStoppedOutDates,
       reportedDates: Array.isArray(data.reportedDates) ? data.reportedDates : [],
     };
   }
