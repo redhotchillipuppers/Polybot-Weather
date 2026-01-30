@@ -73,7 +73,7 @@ export const STOP_MAX_PROXIMITY_C = 1.0;
 export const STOP_EDGE_FLIP = 0.02;
 
 /** Maximum stop-outs per date before blocking new entries */
-export const MAX_STOPOUTS_PER_DATE = 2;
+export const MAX_STOPOUTS_PER_DATE = 3;
 
 /** Minimum market liquidity required before entering trades (USD) */
 export const MIN_TRADE_LIQUIDITY = 150;
