@@ -300,6 +300,7 @@ export function getEmptyPositionsFile(): PositionsFile {
     positions: {},
     decidedDates: {},
     reportedDates: [],
+    stoppedOutDates: {},
   };
 }
 
@@ -307,10 +308,23 @@ export function getEmptyPositionsFile(): PositionsFile {
 export function loadPositionsFile(): PositionsFile {
   const data = readJson<PositionsFile | null>(getPositionsPath(), null);
   if (data && typeof data === 'object') {
+    // Handle migration from boolean to number for stoppedOutDates
+    let stoppedOutDates: { [dateKey: string]: number } = {};
+    if (data.stoppedOutDates && typeof data.stoppedOutDates === 'object') {
+      for (const [dateKey, value] of Object.entries(data.stoppedOutDates)) {
+        // Convert boolean (old format) to number (new format)
+        if (typeof value === 'boolean') {
+          stoppedOutDates[dateKey] = value ? 1 : 0;
+        } else if (typeof value === 'number') {
+          stoppedOutDates[dateKey] = value;
+        }
+      }
+    }
     return {
       positions: data.positions || {},
       decidedDates: data.decidedDates || {},
       reportedDates: Array.isArray(data.reportedDates) ? data.reportedDates : [],
+      stoppedOutDates,
     };
   }
   return getEmptyPositionsFile();

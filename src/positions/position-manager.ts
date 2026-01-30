@@ -4,12 +4,14 @@ import type { MarketSnapshot, Position, PositionsFile, ClosedPositionDetail, Ear
 import { loadPositionsFile, savePositionsFile as persistPositionsFile, appendDailyReport, POSITIONS_FILE_PATH, DAILY_REPORTS_FILE_PATH } from '../persistence/file-store.js';
 import { checkDecided95, extractDateKeyFromEndDate } from './decided-95.js';
 import type { LadderStats } from '../ladder-coherence.js';
+import { MAX_STOPOUTS_PER_DATE } from '../config/constants.js';
 
 // In-memory positions state
 let positionsData: PositionsFile = {
   positions: {},
   decidedDates: {},
   reportedDates: [],
+  stoppedOutDates: {},
 };
 
 // Get file paths for logging
@@ -60,6 +62,13 @@ export function createPositionIfNeeded(
   if (existingPosition && existingPosition.isOpen) {
     // Position already exists and is open, skip
     return null;
+  }
+
+  // Check if date has reached max stop-outs limit
+  const stopoutCount = positionsData.stoppedOutDates[dateKey] || 0;
+  if (stopoutCount >= MAX_STOPOUTS_PER_DATE) {
+    console.log(`[Position] Blocked execution for ${snapshot.marketId.substring(0, 8)}...: skipReason=DATEKEY_STOPPED_OUT (${stopoutCount}/${MAX_STOPOUTS_PER_DATE})`);
+    return 'DATEKEY_STOPPED_OUT';
   }
 
   // Step 3 execution constraint: Check ladder coherence
@@ -198,6 +207,10 @@ export function closePositionsForDate(
   // Save report
   appendDailyReport(report);
 
+  // Increment stop-out counter for this date
+  const currentStopoutCount = positionsData.stoppedOutDates[dateKey] || 0;
+  positionsData.stoppedOutDates[dateKey] = currentStopoutCount + 1;
+
   // Mark date as reported
   positionsData.reportedDates.push(dateKey);
   savePositionsFile();
@@ -236,5 +249,6 @@ export function loadPositionsData(): void {
   positionsData = loadPositionsFile();
   const openPositionCount = Object.values(positionsData.positions).filter(p => p.isOpen).length;
   const decidedDateCount = Object.values(positionsData.decidedDates).filter(d => d.decidedAt !== null).length;
-  console.log(`Loaded ${openPositionCount} open position(s), ${decidedDateCount} decided date(s), ${positionsData.reportedDates.length} reported date(s).`);
+  const lockedDateCount = Object.values(positionsData.stoppedOutDates).filter(count => count >= MAX_STOPOUTS_PER_DATE).length;
+  console.log(`Loaded ${openPositionCount} open position(s), ${decidedDateCount} decided date(s), ${positionsData.reportedDates.length} reported date(s), ${lockedDateCount} locked date(s).`);
 }

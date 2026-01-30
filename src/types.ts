@@ -103,6 +103,7 @@ export interface PositionsFile {
   positions: { [marketId: string]: Position };
   decidedDates: { [dateKey: string]: DecidedDateInfo };
   reportedDates: string[];  // Array of dateKeys already reported
+  stoppedOutDates: { [dateKey: string]: number };  // Counter of stop-outs per date
 }
 
 export interface ClosedPositionDetail {
@@ -162,7 +163,7 @@ export interface MonitoringSnapshot {
 }
 
 // Skip reasons for decision gating
-export type SkipReason = 'LADDER_INCOHERENT' | 'DATEKEY_ALREADY_HAS_POSITION' | null;
+export type SkipReason = 'LADDER_INCOHERENT' | 'DATEKEY_ALREADY_HAS_POSITION' | 'DATEKEY_STOPPED_OUT' | null;
 
 // Decision output for a single market
 export interface MarketDecision {

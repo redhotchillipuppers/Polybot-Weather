@@ -166,6 +166,7 @@ function createFreshPositionsData(): PositionsFile {
     positions: {},
     decidedDates: {},
     reportedDates: [],
+    stoppedOutDates: {},
   };
 }
 

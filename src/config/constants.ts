@@ -71,3 +71,6 @@ export const DEFAULT_PRICE_PAIRS = [
   { yes: 0.495, no: 0.505 },
   { yes: 0.5, no: 0.5 },
 ] as const;
+
+/** Maximum stop-outs per date before blocking new entries */
+export const MAX_STOPOUTS_PER_DATE = 2;
