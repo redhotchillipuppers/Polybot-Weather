@@ -145,7 +145,7 @@ export interface PositionsFile {
   positions: { [marketId: string]: Position };
   decidedDates: { [dateKey: string]: DecidedDateInfo };
   candidateState: { [dateKey: string]: CandidateState };
-  stoppedOutDates: { [dateKey: string]: boolean };
+  stoppedOutDates: { [dateKey: string]: number };  // Counter of stop-outs per date
   reportedDates: string[];  // Array of dateKeys already reported
 }
 
