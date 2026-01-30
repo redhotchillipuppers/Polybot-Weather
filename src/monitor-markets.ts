@@ -12,7 +12,7 @@ import type {
   DecisionActionRecord,
 } from './types.js';
 import { formatError, safeArray, safeNumber, safeString } from './api-utils.js';
-import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge } from './probability-model.js';
+import { calculateMarketProbability, calculateHoursUntilResolution, analyzeEdge, calculateTimeCompression } from './probability-model.js';
 
 // Import from new modules
 import { parseMarketQuestion, extractDateFromQuestion, extractTemperatureFromQuestion } from './parsers/market-parser.js';
@@ -156,7 +156,7 @@ function marketToSnapshot(
 
         // Calculate edge if we have both model probability and market price
         if (modelProbability !== null && yesPrice !== null) {
-          const edgeAnalysis = analyzeEdge(modelProbability, yesPrice);
+          const edgeAnalysis = analyzeEdge(modelProbability, yesPrice, hoursUntilResolution);
           edge = edgeAnalysis.edge;
           edgePercent = edgeAnalysis.edgePercent;
           signal = edgeAnalysis.signal;
@@ -381,22 +381,29 @@ function buildCandidatePool(
     const strikeTempC = parsedQuestion.bracketValue;
     const proximityAbsC = Math.abs(modelTempC - strikeTempC);
 
-    const candidates: Array<{ side: CandidateSide; edge: number; marketImpliedProb: number }> = [
+    // Calculate time compression based on hours to settlement
+    const hoursToSettlement = snapshot.endDate ? calculateHoursUntilResolution(snapshot.endDate) : 0;
+    const timeCompression = calculateTimeCompression(hoursToSettlement);
+
+    const candidates: Array<{ side: CandidateSide; rawEdge: number; effectiveEdge: number; marketImpliedProb: number }> = [
       {
         side: 'YES',
-        edge: modelProbability - yesPrice,
+        rawEdge: modelProbability - yesPrice,
+        effectiveEdge: (modelProbability - yesPrice) * timeCompression,
         marketImpliedProb: yesPrice,
       },
       {
         side: 'NO',
-        edge: (1 - modelProbability) - noPrice,
+        rawEdge: (1 - modelProbability) - noPrice,
+        effectiveEdge: ((1 - modelProbability) - noPrice) * timeCompression,
         marketImpliedProb: noPrice,
       },
     ];
 
     for (const candidateInfo of candidates) {
       if (proximityAbsC > ENTRY_MAX_PROXIMITY_C) continue;
-      if (candidateInfo.edge < ENTRY_MIN_EDGE) continue;
+      // Use effective edge (time-compressed) for threshold check
+      if (candidateInfo.effectiveEdge < ENTRY_MIN_EDGE) continue;
 
       const candidate: CandidateSelection = {
         dateKey,
@@ -410,9 +417,9 @@ function buildCandidatePool(
         modelTempC,
         modelProbability,
         marketImpliedProb: candidateInfo.marketImpliedProb,
-        edge: candidateInfo.edge,
+        edge: candidateInfo.rawEdge, // Store raw edge for reference
         proximityAbsC,
-        score: candidateInfo.edge,
+        score: candidateInfo.effectiveEdge, // Score by effective edge (time-compressed)
         computedAt,
       };
 

@@ -66,6 +66,9 @@ export const ENTRY_MAX_PROXIMITY_C = 0.7;
 /** Minimum positive edge required to enter a trade */
 export const ENTRY_MIN_EDGE = 0.04;
 
+/** Reference window where time compression = 1.0 (hours) */
+export const TIME_COMPRESSION_REF_HOURS = 24;
+
 /** Thesis stop: max absolute distance between model temp and entry strike temp */
 export const STOP_MAX_PROXIMITY_C = 1.0;
 
