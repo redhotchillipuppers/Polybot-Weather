@@ -77,11 +77,15 @@ export function extractDateFromQuestion(question: string): string | null {
       }
 
       // Assume current year, or next year if the date has passed
+      // Compare only calendar dates (not timestamps) to avoid same-day issues
       const now = new Date();
       let year = now.getFullYear();
       const testDate = new Date(year, monthNum, day);
 
-      if (testDate < now) {
+      // Normalize both dates to midnight for comparison
+      const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      if (testDate < todayMidnight) {
         year += 1;
       }
 
