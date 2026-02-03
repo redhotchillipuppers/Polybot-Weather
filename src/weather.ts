@@ -511,3 +511,16 @@ export async function getWeatherForDates(apiKey: string, dates: Date[]): Promise
 
   return forecasts;
 }
+
+export async function getLondonWeatherForecastsNextThreeDays(apiKey: string): Promise<WeatherForecast[]> {
+  const baseDate = new Date();
+  baseDate.setHours(0, 0, 0, 0);
+
+  const dates = [0, 1, 2].map(offset => {
+    const target = new Date(baseDate);
+    target.setDate(baseDate.getDate() + offset);
+    return target;
+  });
+
+  return getWeatherForDates(apiKey, dates);
+}
